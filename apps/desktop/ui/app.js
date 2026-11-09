@@ -172,7 +172,7 @@ async function runSearch(query, force = false) {
     list.innerHTML = hits
       .map(
         (hit, i) => `<li class="result" data-i="${i}" data-path="${esc(hit.path)}" data-archived="${hit.archived ? esc(hit.archived) : ""}">
-          <div class="title">${highlight(hit.title, query)}${hit.archived ? '<span class="pill">archived</span>' : ""}</div>
+          <div class="title">${highlight(hit.title, query)}${hit.kind === "ai-session" || hit.kind === "ai-thread" ? '<span class="pill ai">AI session</span>' : ""}${hit.kind === "topic" ? '<span class="pill topic">topic</span>' : ""}${hit.archived ? '<span class="pill">archived</span>' : ""}</div>
           <div class="path">${esc(hit.path)}${(hit.tags || []).map((t) => ` <span class="tag">#${esc(t)}</span>`).join("")}</div>
           <div class="snippet">${highlight(hit.snippet, query)}</div>
         </li>`)
@@ -505,6 +505,15 @@ async function loadSettings() {
     form.pack_after_days.value = d.pack_after_days;
     form.undo_days.value = d.undo_days;
     form.querySelectorAll('input[name="auto"]').forEach((box) => (box.checked = d.auto_apply.includes(box.value)));
+    form.ai_enabled.checked = settings.ai.enabled;
+    form.ai_folder.value = settings.ai.folder;
+    form.ai_automated.checked = settings.ai.include_automated;
+    call("ai_status").then((ai) => {
+      const total = ai.claude_code + ai.codex;
+      $("#ai-status").textContent = total
+        ? `Found ${ai.claude_code} Claude Code and ${ai.codex} Codex sessions on this computer.`
+        : "No Claude Code or Codex sessions found on this computer yet.";
+    }).catch(() => {});
     form.provider.value = settings.model.provider || "none";
     form.model.value = settings.model.model || "";
     form.base_url.value = settings.model.base_url || "";
@@ -532,6 +541,11 @@ $("#settings-form").addEventListener("submit", async (event) => {
     undo_days: Number(form.undo_days.value),
     auto_apply: [...form.querySelectorAll('input[name="auto"]:checked')].map((b) => b.value),
   });
+  Object.assign(s.ai, {
+    enabled: form.ai_enabled.checked,
+    folder: form.ai_folder.value.trim() || "AI sessions",
+    include_automated: form.ai_automated.checked,
+  });
   const provider = form.provider.value;
   s.model =
     provider === "none" ? { provider: "none" }
@@ -545,6 +559,29 @@ $("#settings-form").addEventListener("submit", async (event) => {
   } catch (error) {
     toast(String(error.message || error), true);
   }
+});
+
+$("#ai-import").addEventListener("click", async () => {
+  const button = $("#ai-import");
+  button.disabled = true;
+  button.textContent = "Importing…";
+  try {
+    const form = $("#settings-form");
+    if (!form._settings.ai.enabled) {
+      form.ai_enabled.checked = true;
+      form.requestSubmit();
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const report = await call("ai_import");
+    const parts = [`${report.added.length} new`];
+    if (report.updated.length) parts.push(`${report.updated.length} updated`);
+    toast(`AI sessions: ${parts.join(", ")}. Find them in Remember; Dream gathers them tonight.`);
+    refreshStatus();
+  } catch (error) {
+    toast(String(error.message || error), true);
+  }
+  button.disabled = false;
+  button.textContent = "Import now";
 });
 
 $("#make-demo").addEventListener("click", async () => {

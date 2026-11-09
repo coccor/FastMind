@@ -86,8 +86,19 @@ impl Note {
         ) {
             return true;
         }
+        if kind.starts_with("ai-") {
+            return false;
+        }
+        // A daily note's name is its date, perhaps with the weekday: "2026-11-09", "2026-11-09 Monday".
         let stem = self.stem();
-        let dated = stem.len() >= 10
+        let rest = stem.get(10..).unwrap_or("").trim().to_ascii_lowercase();
+        let only_a_date = rest.is_empty()
+            || (!rest.contains(' ')
+                && ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                    .iter()
+                    .any(|day| rest.starts_with(day)));
+        let dated = only_a_date
+            && stem.len() >= 10
             && stem.as_bytes()[..10]
                 .iter()
                 .enumerate()

@@ -127,6 +127,34 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "ai_status" => {
+                let settings = self.settings().ai;
+                let transcripts = crate::sessions::discover(&crate::sessions::AiSettings {
+                    sources: vec!["claude_code".into(), "codex".into()],
+                    ..settings.clone()
+                });
+                let count =
+                    |source: &str| transcripts.iter().filter(|t| t.source == source).count();
+                json!({
+                    "enabled": settings.enabled,
+                    "claude_code": count("claude_code"),
+                    "codex": count("codex"),
+                    "folder": settings.folder,
+                })
+            }
+            "ai_import" => {
+                let settings = self.settings();
+                let model = self.model();
+                let report = crate::sessions::import(
+                    &nb,
+                    &settings.ai,
+                    model.as_ref(),
+                    settings.dream.model_requests,
+                    now,
+                )?;
+                self.invalidate();
+                json!(report)
+            }
             "pin_note" => {
                 // Keep forever: Dream never merges, gathers or archives a pinned note.
                 let path: String = arg(&args, "path")?;
@@ -186,6 +214,16 @@ impl App {
                 let _running = self.dreaming.lock().expect("dream lock");
                 let settings = self.settings();
                 let model = self.model();
+                // Fresh AI sessions first, so tonight's Dream compresses them too.
+                if settings.ai.enabled {
+                    crate::sessions::import(
+                        &nb,
+                        &settings.ai,
+                        model.as_ref(),
+                        settings.dream.model_requests,
+                        now,
+                    )?;
+                }
                 dream::run(&nb, &settings.dream, model.as_ref(), now)?;
                 let auto = dream::auto_apply(&nb, &settings.dream, now)?;
                 self.invalidate();
@@ -349,7 +387,7 @@ impl App {
                 json!({
                     "path": note.path, "title": note.title, "score": 0.0,
                     "snippet": text::excerpt(&note.body().replace(&format!("# {}", note.title), ""), 180),
-                    "line": 1, "archived": null, "tags": note.front.tags(),
+                    "line": 1, "archived": null, "tags": note.front.tags(), "kind": note.note_type(),
                 })
             })
             .collect()

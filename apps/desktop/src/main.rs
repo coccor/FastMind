@@ -191,10 +191,25 @@ fn within(now: NaiveTime, start: &str, end: &str) -> bool {
 /// proposes, apart from the kinds the user lets it apply on its own.
 fn nightly(app: AppHandle) {
     std::thread::spawn(move || {
+        let mut last_import: Option<std::time::Instant> = None;
         loop {
             std::thread::sleep(Duration::from_secs(300));
             let core = app.state::<Core>().0.clone();
             let settings = core.settings();
+            // AI sessions arrive through the day: import them every half hour, so they're
+            // searchable the same afternoon.
+            let due = last_import.is_none_or(|at| at.elapsed() >= Duration::from_secs(30 * 60));
+            if settings.ai.enabled && due {
+                last_import = Some(std::time::Instant::now());
+                if let Ok(report) = core.call("ai_import", json!({}))
+                    && report["added"]
+                        .as_array()
+                        .is_some_and(|added| !added.is_empty())
+                {
+                    let _ = app.emit("changed", ());
+                    update_tray(&app);
+                }
+            }
             if !settings.dream.nightly {
                 continue;
             }

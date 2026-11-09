@@ -20,6 +20,7 @@ pub struct Doc {
     terms: HashMap<String, f32>,
     len: f32,
     tags: Vec<String>,
+    kind: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -33,6 +34,8 @@ pub struct Hit {
     /// The archive item id, when the hit is an archived note.
     pub archived: Option<String>,
     pub tags: Vec<String>,
+    /// The note's `type:` (`ai-session`, `topic`, …), empty when it has none.
+    pub kind: String,
 }
 
 #[derive(Default)]
@@ -189,6 +192,7 @@ impl Index {
                 line,
                 archived: doc.archived.clone(),
                 tags: doc.tags.clone(),
+                kind: doc.kind.clone(),
             });
         }
         hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.path.cmp(&b.path)));
@@ -227,6 +231,7 @@ fn doc(note: &Note, archived: Option<String>) -> Doc {
         terms,
         len,
         tags,
+        kind: note.note_type(),
     }
 }
 

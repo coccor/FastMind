@@ -15,6 +15,7 @@ pub mod model;
 pub mod notebook;
 pub mod remember;
 pub mod search;
+pub mod sessions;
 pub mod text;
 pub mod usage;
 

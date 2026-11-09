@@ -139,6 +139,14 @@
             </div>
           </fieldset>
           <fieldset>
+            <legend>Learn from AI sessions</legend>
+            <p class="muted small">Your coding sessions with Claude Code and Codex become notes: what you asked, how it ended, the files changed and the commands run. Secrets are taken out first, and Dream gathers sessions about the same work into one note. Transcripts are read on this computer only.</p>
+            <label class="check"><input type="checkbox" name="ai_enabled"> Turn AI sessions into notes</label>
+            <label>Into the folder <input name="ai_folder"></label>
+            <label class="check"><input type="checkbox" name="ai_automated"> Include sessions run by scripts (headless, CI)</label>
+            <div class="row gap"><button type="button" id="ai-import">Import now</button><span class="muted small" id="ai-status"></span></div>
+          </fieldset>
+          <fieldset>
             <legend>Model</legend>
             <p class="muted small">Optional. Without one, Dream and Remember work from text statistics alone and nothing leaves this computer.</p>
             <label>Provider

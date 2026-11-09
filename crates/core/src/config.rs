@@ -21,6 +21,8 @@ pub struct Settings {
     pub model: ModelSettings,
     /// Start with the computer.
     pub autostart: bool,
+    /// Learn from AI sessions (off until chosen).
+    pub ai: crate::sessions::AiSettings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -58,6 +60,8 @@ pub struct DreamSettings {
     pub auto_apply: Vec<String>,
     /// Most model requests one night may make.
     pub model_requests: usize,
+    /// AI session notes nobody opened in this many days are proposed for the archive.
+    pub ai_session_days: i64,
 }
 
 impl Default for Settings {
@@ -69,6 +73,7 @@ impl Default for Settings {
             dream: DreamSettings::default(),
             model: ModelSettings::None,
             autostart: false,
+            ai: crate::sessions::AiSettings::default(),
         }
     }
 }
@@ -98,6 +103,7 @@ impl Default for DreamSettings {
             fragment_words: 120,
             auto_apply: vec!["pack".into()],
             model_requests: 20,
+            ai_session_days: 90,
         }
     }
 }

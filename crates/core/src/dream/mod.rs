@@ -275,7 +275,11 @@ pub fn run(
         proposals.push(Proposal {
             id: String::new(),
             kind: Kind::Merge,
-            title: format!("Merge {} into \"{}\"", names.join(", "), notes[keep].title),
+            title: if absorbed.iter().all(|n| n.title == notes[keep].title) {
+                format!("Merge {} copies of \"{}\"", group.len(), notes[keep].title)
+            } else {
+                format!("Merge {} into \"{}\"", names.join(", "), notes[keep].title)
+            },
             reason: format!(
                 "{} say the same thing ({:.0}% alike). The copy with the most links stays; what the others add is kept under it, and their titles become aliases.",
                 if group.len() == 2 { "Both notes".to_owned() } else { format!("These {} notes", group.len()) },
@@ -382,6 +386,90 @@ pub fn run(
         claimed.extend(members);
     }
 
+    // 2b. Threads: AI sessions that continued the same piece of work, gathered into one note.
+    let sessions: Vec<usize> = (0..notes.len())
+        .filter(|i| !claimed.contains(i) && allowed[*i] && notes[*i].note_type() == "ai-session")
+        .collect();
+    let mut threads = analyze::UnionFind::new(notes.len());
+    for (k, a) in sessions.iter().enumerate() {
+        for b in &sessions[k + 1..] {
+            let (na, nb_) = (&notes[*a], &notes[*b]);
+            if na.front.text("project") == nb_.front.text("project")
+                && same_thread(&na.title, &nb_.title)
+            {
+                threads.union(*a, *b);
+            }
+        }
+    }
+    for members in threads.groups() {
+        // A thread still being worked on waits until it has been quiet for a few days.
+        let newest = members
+            .iter()
+            .map(|i| notes[*i].touched)
+            .max()
+            .unwrap_or(now);
+        if now - newest < Duration::days(3) {
+            continue;
+        }
+        let group: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
+        let title = thread_title(&group);
+        let folder = group[0].folder().to_owned();
+        let stem = fsx::safe_stem(&title);
+        let name = fsx::free_name(&stem, "md", |candidate| {
+            let rel = join(&folder, candidate);
+            nb.exists(&rel) || planned_paths.contains(&rel)
+        });
+        let path = join(&folder, &name);
+        planned_paths.insert(path.clone());
+        let summary = format!(
+            "{} AI sessions on this, from {} to {}.",
+            group.len(),
+            group
+                .iter()
+                .filter_map(|n| n.created)
+                .min()
+                .unwrap_or(now)
+                .format("%Y-%m-%d"),
+            group
+                .iter()
+                .filter_map(|n| n.created)
+                .max()
+                .unwrap_or(now)
+                .format("%Y-%m-%d"),
+        );
+        let text = compose::topic(&title, &summary, &group, now);
+        let text = crate::frontmatter::set(
+            &text,
+            "type",
+            &crate::frontmatter::Value::Text("ai-thread".into()),
+        );
+        let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
+        proposals.push(Proposal {
+            id: String::new(),
+            kind: Kind::Topic,
+            title: format!("Gather {} AI sessions into \"{title}\"", group.len()),
+            reason: format!(
+                "{} sessions continued the same piece of work. One note keeps each session's question, outcome, files and commands, in date order.",
+                group.len()
+            ),
+            notes: group.iter().map(|n| n.path.clone()).collect(),
+            notes_removed: group.len() - 1,
+            bytes_freed: freed,
+            disk_freed: 0,
+            preview: Some(text),
+            status: Status::Pending,
+            entry: None,
+            error: None,
+            plan: Plan::Topic {
+                path,
+                title,
+                summary,
+                fragments: group.iter().map(|n| n.path.clone()).collect(),
+            },
+        });
+        claimed.extend(members);
+    }
+
     // 3. Retire: notes finished long ago, never used, or empty.
     for (index, note) in notes.iter().enumerate() {
         if claimed.contains(&index) || protected(note) {
@@ -397,6 +485,10 @@ pub fn run(
         let status = note.status();
         let reason = if features[index].words < 3 && note.links.is_empty() && idle >= 1 {
             Some("It's empty: no text worth keeping and no links.".to_owned())
+        } else if note.note_type() == "ai-session" && idle >= settings.ai_session_days {
+            Some(format!(
+                "An AI session from {idle} days ago that nobody has opened or linked to since."
+            ))
         } else if note.is_record() {
             // Daily notes, meetings and logs are history, kept however old.
             None
@@ -597,6 +689,39 @@ pub fn run(
     };
     save(nb, &report)?;
     Ok(report)
+}
+
+/// A title without a trailing copy number ("Backlog creation 2").
+fn base_title(title: &str) -> String {
+    let lower = title.trim().to_lowercase();
+    match lower.rsplit_once(' ') {
+        Some((head, tail)) if tail.chars().all(|c| c.is_ascii_digit()) => head.to_owned(),
+        _ => lower,
+    }
+}
+
+/// Two AI sessions continue one piece of work when their titles match, or share most of their
+/// words (at least two).
+fn same_thread(a: &str, b: &str) -> bool {
+    let (a, b) = (base_title(a), base_title(b));
+    if a == b {
+        return true;
+    }
+    let ta: HashSet<String> = text::terms(&a).into_iter().collect();
+    let tb: HashSet<String> = text::terms(&b).into_iter().collect();
+    let shared = ta.intersection(&tb).count();
+    shared >= 2 && shared * 3 >= ta.len().max(tb.len()) * 2
+}
+
+fn thread_title(group: &[&Note]) -> String {
+    let mut titles: Vec<String> = group.iter().map(|n| n.title.trim().to_owned()).collect();
+    titles.sort_by_key(|t| (t.len(), t.clone()));
+    let base = base_title(&titles[0]);
+    let mut chars = base.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "AI sessions".to_owned(),
+    }
 }
 
 fn entry_size(nb: &Notebook, id: &str) -> u64 {
