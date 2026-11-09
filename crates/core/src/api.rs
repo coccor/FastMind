@@ -127,6 +127,59 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "suggest_homes" => {
+                let path: String = arg(&args, "path")?;
+                let settings = self.settings();
+                json!(self.with_index(&nb, |index| crate::filing::suggest(
+                    index,
+                    &path,
+                    &settings.inbox,
+                    &settings.ai.folder
+                )))
+            }
+            "folders" => json!(crate::filing::folders(&nb)),
+            "file_note" => {
+                let path: String = arg(&args, "path")?;
+                let folder: Option<String> = arg(&args, "folder").unwrap_or(None);
+                let home: Option<String> = arg(&args, "home").unwrap_or(None);
+                let filed = crate::filing::file(&nb, &path, folder.as_deref(), home.as_deref())?;
+                self.invalidate();
+                json!({ "path": filed })
+            }
+            "related" => {
+                let path: String = arg(&args, "path")?;
+                let notes = nb.notes();
+                let inbound = crate::notebook::backlinks(&notes);
+                let linked_from: Vec<Value> = inbound
+                    .get(&path)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|from| notes.iter().find(|n| &n.path == from))
+                    .map(|n| json!({ "path": n.path, "title": n.title }))
+                    .collect();
+                let similar = self.with_index(&nb, |index| index.similar(&path, 6));
+                json!({ "linked_from": linked_from, "similar": similar })
+            }
+            "write_note" => {
+                // Saves an edit made in the app. `base` is the text the edit started from: if the
+                // file changed since (another editor, a sync), nothing is overwritten.
+                let path: String = arg(&args, "path")?;
+                let new_text: String = arg(&args, "text")?;
+                let base: Option<String> = arg(&args, "base").unwrap_or(None);
+                let current = std::fs::read_to_string(nb.path(&path)?).unwrap_or_default();
+                if base.as_deref().is_some_and(|base| base != current) {
+                    return Err(Error::msg(
+                        "the note changed on disk since you opened it; reopen it to see the latest",
+                    ));
+                }
+                let title =
+                    crate::notebook::build_note(path.clone(), current.clone(), 0, now).title;
+                let mut tx = Transaction::begin(&nb, format!("Edit \"{title}\""), "edit")?;
+                tx.write(&path, new_text.as_bytes())?;
+                let entry = tx.commit()?;
+                self.invalidate();
+                json!({ "entry": entry.id })
+            }
             "ai_status" => {
                 let settings = self.settings().ai;
                 let transcripts = crate::sessions::discover(&crate::sessions::AiSettings {

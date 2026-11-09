@@ -201,6 +201,60 @@ impl Index {
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct Similar {
+    pub path: String,
+    pub title: String,
+    pub kind: String,
+    pub score: f32,
+}
+
+impl Index {
+    /// Notes most like `path`: scored on its own strongest words. Archived notes are left out.
+    pub fn similar(&self, path: &str, limit: usize) -> Vec<Similar> {
+        let Some(source) = self.doc(path) else {
+            return Vec::new();
+        };
+        let n = self.docs.len() as f32;
+        let idf = |term: &str| {
+            let df = *self.df.get(term).unwrap_or(&1) as f32;
+            ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
+        };
+        let mut strongest: Vec<(&String, f32)> = source
+            .terms
+            .iter()
+            .map(|(t, tf)| (t, tf * idf(t)))
+            .collect();
+        strongest.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
+        strongest.truncate(14);
+        let mut out: Vec<Similar> = self
+            .docs
+            .iter()
+            .filter(|doc| doc.archived.is_none() && doc.path != path)
+            .filter_map(|doc| {
+                let mut score = 0.0;
+                for (term, weight) in &strongest {
+                    let Some(tf) = doc.terms.get(*term) else {
+                        continue;
+                    };
+                    let (k1, b) = (1.2, 0.75);
+                    score += weight.sqrt() * idf(term) * (tf * (k1 + 1.0))
+                        / (tf + k1 * (1.0 - b + b * doc.len / self.avg_len));
+                }
+                (score > 0.0).then(|| Similar {
+                    path: doc.path.clone(),
+                    title: doc.title.clone(),
+                    kind: doc.kind.clone(),
+                    score,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.path.cmp(&b.path)));
+        out.truncate(limit);
+        out
+    }
+}
+
 fn doc(note: &Note, archived: Option<String>) -> Doc {
     let mut terms: HashMap<String, f32> = HashMap::new();
     let mut add = |source: &str, weight: f32| {

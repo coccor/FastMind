@@ -7,6 +7,7 @@ pub mod capture;
 pub mod config;
 pub mod demo;
 pub mod dream;
+pub mod filing;
 pub mod frontmatter;
 pub mod fsx;
 pub mod journal;

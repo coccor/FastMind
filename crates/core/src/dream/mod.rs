@@ -1040,13 +1040,7 @@ fn execute(
             let absorbed: Vec<&Note> = absorb.iter().filter_map(|p| find(p)).collect();
             let merged = compose::merge(keep_note, &absorbed, now);
             let gone: HashSet<String> = absorb.iter().cloned().collect();
-            retarget_all(
-                &mut tx,
-                &notes,
-                &gone,
-                keep_note.stem(),
-                Some((keep.as_str(), merged)),
-            )?;
+            retarget_all(&mut tx, &notes, &gone, keep, Some((keep.as_str(), merged)))?;
             for note in absorbed {
                 archive::archive(
                     &mut tx,
@@ -1078,15 +1072,9 @@ fn execute(
             } else {
                 path.clone()
             };
-            let stem = path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&path)
-                .trim_end_matches(".md")
-                .to_owned();
             tx.write(&path, text.as_bytes())?;
             let gone: HashSet<String> = fragments.iter().cloned().collect();
-            retarget_all(&mut tx, &notes, &gone, &stem, None)?;
+            retarget_all(&mut tx, &notes, &gone, &path, None)?;
             for note in group {
                 archive::archive(
                     &mut tx,
@@ -1182,7 +1170,7 @@ fn retarget_all(
     tx: &mut Transaction,
     notes: &[Note],
     gone: &HashSet<String>,
-    new_stem: &str,
+    new_path: &str,
     override_text: Option<(&str, String)>,
 ) -> Result<()> {
     let resolver = Resolver::new(notes);
@@ -1205,7 +1193,7 @@ fn retarget_all(
         };
         let front = crate::frontmatter::parse(&text);
         let body = &text[front.body_start..];
-        let changed = links::retarget(body, points_to, new_stem);
+        let changed = links::retarget_note(body, points_to, new_path, &note.path);
         let new_text = format!("{}{}", &text[..front.body_start], changed);
         if new_text != note.text {
             tx.write(&note.path, new_text.as_bytes())?;

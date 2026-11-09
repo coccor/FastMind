@@ -54,7 +54,11 @@ function toast(message, error = false) {
   toastTimer = setTimeout(() => (el.hidden = true), error ? 6000 : 3000);
 }
 
+/// Wikilinks read as their text in snippets: [[Note|shown]] → shown.
+const unlink = (text) => String(text ?? "").replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_, target, shown) => shown || target);
+
 function highlight(text, query) {
+  text = unlink(text);
   const words = (query || "")
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
@@ -221,64 +225,189 @@ async function readNote(path, archivedId) {
   try {
     const note = await call("read", { path });
     reader.hidden = false;
+    reader._note = note;
     reader.innerHTML = `<div class="reader-head"><h2>${esc(note.title)}</h2>
-        <span><button id="open-editor">Open in editor</button> <button id="close-reader" title="Close">✕</button></span></div>
+        <span class="reader-actions"><button id="edit-note" title="Edit (Ctrl+E)">Edit</button><button id="open-editor" title="Open in your editor">Open</button><button id="close-reader" title="Close">✕</button></span></div>
       <div class="muted small">${esc(note.path)}</div>
-      <div class="md">${renderMarkdown(note.text)}</div>`;
+      <div class="md" id="reader-body">${renderMarkdown(note.text)}</div>
+      <div class="related" id="related"></div>`;
     $("#open-editor").addEventListener("click", () => openInEditor(path));
+    $("#edit-note").addEventListener("click", () => editNote());
     $("#close-reader").addEventListener("click", () => { reader.hidden = true; selected = null; });
-    reader.querySelectorAll(".wikilink").forEach((a) =>
-      a.addEventListener("click", (event) => {
-        event.preventDefault();
-        $("#query").value = a.dataset.target;
-        runSearch(a.dataset.target, true).then(() => {
-          const first = document.querySelector(".result");
-          if (first) readNote(first.dataset.path, first.dataset.archived);
-        });
-      }));
+    wireLinks(reader);
+    loadRelated(path);
   } catch (error) {
     toast(String(error.message || error), true);
   }
 }
 
+function wireLinks(root) {
+  root.querySelectorAll(".wikilink").forEach((a) =>
+    a.addEventListener("click", (event) => {
+      event.preventDefault();
+      $("#query").value = a.dataset.target;
+      runSearch(a.dataset.target, true).then(() => {
+        const first = document.querySelector(".result");
+        if (first) readNote(first.dataset.path, first.dataset.archived);
+      });
+    }));
+}
+
+async function loadRelated(path) {
+  try {
+    const { linked_from, similar } = await call("related", { path });
+    if (selected !== path) return;
+    const item = (n) => `<button class="chip" data-path="${esc(n.path)}" title="${esc(n.path)}">${esc(n.title)}</button>`;
+    let html = "";
+    if (linked_from.length) html += `<div class="related-row"><span class="muted small">Linked from</span>${linked_from.map(item).join("")}</div>`;
+    const linked = new Set(linked_from.map((n) => n.path));
+    const more = similar.filter((n) => !linked.has(n.path)).slice(0, 5);
+    if (more.length) html += `<div class="related-row"><span class="muted small">Related</span>${more.map(item).join("")}</div>`;
+    const box = $("#related");
+    box.innerHTML = html;
+    box.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => readNote(b.dataset.path)));
+  } catch {}
+}
+
+function editNote() {
+  const reader = $("#reader");
+  const note = reader._note;
+  if (!note || !$("#reader-body")) return;
+  $("#reader-body").outerHTML = `<div id="reader-edit"><textarea id="edit-text" spellcheck="true">${esc(note.text)}</textarea>
+    <div class="row gap"><button class="primary" id="save-note">Save</button><button id="cancel-edit">Cancel</button><span class="muted small">Ctrl+S saves · Esc cancels</span></div></div>`;
+  $("#edit-note").hidden = true;
+  const area = $("#edit-text");
+  area.focus();
+  const save = async () => {
+    try {
+      await call("write_note", { path: note.path, text: area.value, base: note.text });
+      toast("Saved. History can undo it.");
+      readNote(note.path);
+      runSearch($("#query").value, true);
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  };
+  $("#save-note").addEventListener("click", save);
+  $("#cancel-edit").addEventListener("click", () => readNote(note.path));
+  area.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(); }
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); readNote(note.path); }
+  });
+}
+
 // ---------- Inbox ----------
+let folderList = [];
+
 async function loadInbox() {
   const list = $("#inbox-list");
   try {
     const notes = await call("inbox");
     if (!notes.length) {
-      list.innerHTML = `<li class="empty">Inbox zero. Captures land here until you keep or file them.</li>`;
+      list.innerHTML = `<li class="empty">Inbox zero. Captures land here until you file them.</li>`;
       return;
     }
     list.innerHTML = notes
-      .map((n) => `<li class="card" data-path="${esc(n.path)}">
+      .map((n, i) => `<li class="card inbox-card${i === 0 ? " focused" : ""}" tabindex="0" data-path="${esc(n.path)}">
         <div class="card-head"><div class="grow">
           <div class="title">${esc(n.title)}</div>
-          <div class="reason">${esc(n.snippet)}</div>
-          <div class="meta"><span>${esc(ago(n.captured))}</span><span>${esc(n.path)}</span>${(n.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
+          <div class="reason">${esc(unlink(n.snippet))}</div>
+          <div class="meta"><span>${esc(ago(n.captured))}</span>${(n.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
+          <div class="homes" data-loading="1"><span class="muted small">Finding where it belongs…</span></div>
         </div><div class="actions">
-          <button data-act="read">Read</button><button data-act="keep">Keep</button><button data-act="archive">Archive</button>
+          <button data-act="read" title="Read (R)">Read</button><button data-act="keep" title="Keep in the inbox, off this list (K)">Keep</button><button data-act="archive" title="Archive (A)">Archive</button>
         </div></div></li>`)
       .join("");
+    call("folders").then((folders) => (folderList = folders)).catch(() => {});
+    for (const card of list.querySelectorAll(".inbox-card")) loadHomes(card);
+    list.querySelector(".inbox-card")?.focus();
   } catch (error) {
     list.innerHTML = `<li class="empty">${esc(error.message || error)}</li>`;
   }
 }
 
+async function loadHomes(card) {
+  const box = card.querySelector(".homes");
+  try {
+    const homes = await call("suggest_homes", { path: card.dataset.path });
+    const chip = (h, primary) => `<button class="${primary ? "primary file-best" : "chip"}" data-act="file" data-kind="${esc(h.kind)}" data-target="${esc(h.target)}"
+        title="${h.because.length ? "Beside " + esc(h.because.join(", ")) : ""}">${primary ? "File in " : ""}${h.kind === "note" ? "❖ " : "▸ "}${esc(h.label)}</button>`;
+    box.innerHTML = (homes.length ? chip(homes[0], true) + homes.slice(1).map((h) => chip(h, false)).join("") : `<span class="muted small">No obvious home yet.</span>`)
+      + ` <button class="chip" data-act="other">Other folder…</button>`
+      + (homes.length && homes[0].because.length ? `<div class="muted small why">Beside ${esc(homes[0].because.join(", "))}</div>` : "");
+  } catch {
+    box.innerHTML = `<button class="chip" data-act="other">File in a folder…</button>`;
+  }
+}
+
+async function fileCard(card, kind, target) {
+  const path = card.dataset.path;
+  const args = kind === "note" ? { path, home: target } : { path, folder: target };
+  const { path: filed } = await call("file_note", args);
+  toast(`Filed in ${filed.includes("/") ? filed.slice(0, filed.lastIndexOf("/") + 1) : "the notebook root"}. History can undo it.`);
+  const next = card.nextElementSibling;
+  card.remove();
+  if (next) next.classList.add("focused"), next.focus();
+  if (!document.querySelector(".inbox-card")) loadInbox();
+  refreshStatus();
+}
+
+function askFolder(card) {
+  const box = card.querySelector(".homes");
+  box.innerHTML = `<form class="other-folder"><input list="folder-options" placeholder="Folder, e.g. work/db (new folders are made)" autofocus>
+    <datalist id="folder-options">${folderList.map((f) => `<option value="${esc(f)}">`).join("")}</datalist>
+    <button class="primary">File</button> <button type="button" data-act="cancel-other">Cancel</button></form>`;
+  const form = box.querySelector("form");
+  form.querySelector("input").focus();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const folder = form.querySelector("input").value.trim();
+    try { await fileCard(card, "folder", folder); } catch (error) { toast(String(error.message || error), true); }
+  });
+}
+
 $("#inbox-list").addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   const card = event.target.closest(".card");
-  if (!button || !card) return;
+  if (!card) return;
+  document.querySelectorAll(".inbox-card").forEach((c) => c.classList.toggle("focused", c === card));
+  if (!button) return;
   const path = card.dataset.path;
   try {
-    if (button.dataset.act === "read") { show("remember"); readNote(path); return; }
-    if (button.dataset.act === "keep") { await call("inbox_keep", { path }); toast("Kept. It leaves the inbox; History can undo it."); }
-    if (button.dataset.act === "archive") { await call("archive_note", { path }); toast("Archived. Restore it from the Archive any time."); }
-    loadInbox();
-    refreshStatus();
+    const act = button.dataset.act;
+    if (act === "read") { show("remember"); readNote(path); return; }
+    if (act === "file") { await fileCard(card, button.dataset.kind, button.dataset.target); return; }
+    if (act === "other") { askFolder(card); return; }
+    if (act === "cancel-other") { loadHomes(card); return; }
+    if (act === "keep") { await call("inbox_keep", { path }); toast("Kept. It leaves the inbox; History can undo it."); }
+    if (act === "archive") { await call("archive_note", { path }); toast("Archived. Restore it from the Archive any time."); }
+    if (act === "keep" || act === "archive") { loadInbox(); refreshStatus(); }
   } catch (error) {
     toast(String(error.message || error), true);
   }
+});
+
+// Inbox by keyboard: arrows move, Enter files in the suggestion, F another folder, K keeps,
+// A archives, R reads.
+$("#inbox-list").addEventListener("keydown", (event) => {
+  if (event.target.closest("input")) return;
+  const cards = [...document.querySelectorAll(".inbox-card")];
+  const at = cards.findIndex((c) => c.classList.contains("focused"));
+  const card = cards[at];
+  const move = (to) => {
+    if (!cards[to]) return;
+    cards.forEach((c, i) => c.classList.toggle("focused", i === to));
+    cards[to].focus();
+  };
+  const key = event.key.toLowerCase();
+  if (key === "arrowdown") { event.preventDefault(); move(at + 1); }
+  else if (key === "arrowup") { event.preventDefault(); move(at - 1); }
+  else if (!card) return;
+  else if (key === "enter") { event.preventDefault(); card.querySelector(".file-best")?.click(); }
+  else if (key === "k") card.querySelector('[data-act="keep"]').click();
+  else if (key === "a") card.querySelector('[data-act="archive"]').click();
+  else if (key === "r") card.querySelector('[data-act="read"]').click();
+  else if (key === "f" || key === "o") { event.preventDefault(); askFolder(card); }
 });
 
 // ---------- Dream ----------
@@ -327,7 +456,7 @@ function renderDream(report) {
       const freed = p.bytes_freed + (p.disk_freed || 0);
       const actions =
         p.status === "pending"
-          ? `${p.preview ? '<button data-act="preview">Preview</button>' : ""}${p.kind === "archive" && p.notes[0].endsWith(".md") ? '<button data-act="pin" title="Pin it: Dream never touches it again">Keep forever</button>' : '<button data-act="reject" title="Dream won't propose this again">Skip</button>'}<button data-act="apply" class="primary">Accept</button>`
+          ? `${p.preview ? '<button data-act="preview">Preview</button>' : ""}${p.kind === "archive" && p.notes[0].endsWith(".md") ? '<button data-act="pin" title="Pin it: Dream never touches it again">Keep forever</button>' : '<button data-act="reject" title="Dream won’t propose this again">Skip</button>'}<button data-act="apply" class="primary">Accept</button>`
           : p.status === "applied"
             ? `<span class="status applied">✓ Applied</span><button data-act="undo">Undo</button>`
             : `<span class="status ${p.status}">${p.status === "rejected" ? "Skipped" : "Out of date"}</span>`;
@@ -641,11 +770,19 @@ $("#query").addEventListener("input", (event) => {
   if (!value.trim()) $("#answer").hidden = true;
 });
 $("#query").addEventListener("keydown", (event) => {
+  const results = [...document.querySelectorAll(".result")];
+  const at = results.findIndex((r) => r.classList.contains("selected"));
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const next = results[Math.max(0, Math.min(results.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))];
+    if (next) { readNote(next.dataset.path, next.dataset.archived); next.scrollIntoView({ block: "nearest" }); }
+    return;
+  }
   if (event.key === "Enter") {
     const value = event.target.value.trim();
     if (event.ctrlKey || event.metaKey || value.endsWith("?")) { event.preventDefault(); ask(); return; }
-    const first = document.querySelector(".result");
-    if (first) readNote(first.dataset.path, first.dataset.archived);
+    const pick = results[at] || results[0];
+    if (pick) readNote(pick.dataset.path, pick.dataset.archived);
   }
   if (event.key === "Escape") { event.target.value = ""; runSearch("", true); $("#answer").hidden = true; }
 });
@@ -657,6 +794,7 @@ $("#results").addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); show("remember"); }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") { event.preventDefault(); openCapture(); }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "e" && current === "remember" && !$("#reader").hidden) { event.preventDefault(); editNote(); }
 });
 
 function startMain() {

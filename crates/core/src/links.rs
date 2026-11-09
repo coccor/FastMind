@@ -148,6 +148,60 @@ pub fn retarget_with(
     new_stem: &str,
     keep_shown: bool,
 ) -> String {
+    rewrite(
+        body,
+        points_to,
+        new_stem,
+        keep_shown,
+        &encode(&format!("{new_stem}.md")),
+    )
+}
+
+/// Points links in the note at `from_path` that `points_to` accepts at the note now at
+/// `new_path`: wikilinks by its name, Markdown links by its path relative to `from_path`.
+pub fn retarget_note(
+    body: &str,
+    points_to: impl Fn(&str) -> bool,
+    new_path: &str,
+    from_path: &str,
+) -> String {
+    let name = new_path.rsplit('/').next().unwrap_or(new_path);
+    let stem = name.strip_suffix(".md").unwrap_or(name);
+    rewrite(
+        body,
+        points_to,
+        stem,
+        true,
+        &encode(&relative_path(from_path, new_path)),
+    )
+}
+
+/// `to` as a path relative to the folder of `from` (both notebook-relative, `/`-separated).
+pub fn relative_path(from: &str, to: &str) -> String {
+    let from_dir: Vec<&str> = from
+        .split('/')
+        .collect::<Vec<_>>()
+        .split_last()
+        .map(|(_, dir)| dir.to_vec())
+        .unwrap_or_default();
+    let to_parts: Vec<&str> = to.split('/').collect();
+    let common = from_dir
+        .iter()
+        .zip(&to_parts)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut parts: Vec<&str> = vec![".."; from_dir.len() - common];
+    parts.extend(&to_parts[common..]);
+    parts.join("/")
+}
+
+fn rewrite(
+    body: &str,
+    points_to: impl Fn(&str) -> bool,
+    new_stem: &str,
+    keep_shown: bool,
+    md_target: &str,
+) -> String {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for_each_link(body, |link| {
         if !points_to(link.target) {
@@ -161,7 +215,7 @@ pub fn retarget_with(
                 format!("{new_stem}\u{0}{}", link.target)
             }
         } else {
-            encode(&format!("{new_stem}.md"))
+            md_target.to_owned()
         };
         edits.push((link.start, link.end, replacement));
     });
@@ -241,6 +295,23 @@ mod tests {
             Some("sub/Gamma One.md")
         );
         assert_eq!(resolver.resolve("missing"), None);
+    }
+
+    #[test]
+    fn markdown_links_get_paths_relative_to_their_note() {
+        assert_eq!(
+            relative_path("Index.md", "work/Plan 2.md"),
+            "work/Plan 2.md"
+        );
+        assert_eq!(relative_path("ideas/a.md", "work/b.md"), "../work/b.md");
+        assert_eq!(relative_path("work/x/a.md", "work/b.md"), "../b.md");
+        let out = retarget_note(
+            "[p](inbox/Plan.md) [[Plan]]",
+            |t| t.contains("Plan"),
+            "work/Plan 2.md",
+            "Index.md",
+        );
+        assert_eq!(out, "[p](work/Plan%202.md) [[Plan 2|Plan]]");
     }
 
     #[test]

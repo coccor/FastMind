@@ -181,3 +181,18 @@ legend { font-weight: 650; padding: 0 6px; }
   .main { padding: 16px; }
   .split { grid-template-columns: 1fr; }
 }
+
+/* Filing and reading */
+.homes { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.homes .why { width: 100%; }
+.chip { font-size: 12px; padding: 3px 9px; border-radius: 14px; }
+.inbox-card { outline: none; }
+.inbox-card.focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.other-folder { display: flex; gap: 6px; width: 100%; }
+.other-folder input { flex: 1; }
+.reader-actions { display: flex; gap: 6px; }
+#reader-edit textarea { width: 100%; min-height: 420px; font: 13px/1.55 ui-monospace, "Cascadia Code", Menlo, monospace; margin: 10px 0; resize: vertical; }
+.related { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.related:empty { display: none; }
+.related-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.related-row .muted { margin-right: 4px; min-width: 80px; }
