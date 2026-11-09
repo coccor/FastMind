@@ -133,14 +133,14 @@ pub fn walk_with_meta(
             if !skip(&entry.file_name().to_string_lossy()) {
                 walk_with_meta(&entry.path(), skip, out);
             }
-        } else if kind.is_file() {
-            if let Ok(meta) = entry.metadata() {
-                out.push((
-                    entry.path(),
-                    meta.len(),
-                    meta.modified().unwrap_or(std::time::UNIX_EPOCH),
-                ));
-            }
+        } else if kind.is_file()
+            && let Ok(meta) = entry.metadata()
+        {
+            out.push((
+                entry.path(),
+                meta.len(),
+                meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+            ));
         }
     }
 }
