@@ -48,41 +48,42 @@ fn scan_line<'a>(line: &'a str, offset: usize, visit: &mut impl FnMut(Link<'a>))
                 None => return,
             }
         }
-        if line[at..].starts_with("[[") {
-            if let Some(close) = line[at + 2..].find("]]") {
-                let inner = &line[at + 2..at + 2 + close];
-                let target_len = inner.find(['|', '#', '^']).unwrap_or(inner.len());
-                let target = inner[..target_len].trim_end();
-                if !target.is_empty() && !inner.contains('\n') {
-                    visit(Link {
-                        start: offset + at + 2,
-                        end: offset + at + 2 + target.len(),
-                        target,
-                        has_display: inner.contains('|'),
-                        wiki: true,
-                    });
-                }
-                at += close + 4;
-                continue;
+        if line[at..].starts_with("[[")
+            && let Some(close) = line[at + 2..].find("]]")
+        {
+            let inner = &line[at + 2..at + 2 + close];
+            let target_len = inner.find(['|', '#', '^']).unwrap_or(inner.len());
+            let target = inner[..target_len].trim_end();
+            if !target.is_empty() && !inner.contains('\n') {
+                visit(Link {
+                    start: offset + at + 2,
+                    end: offset + at + 2 + target.len(),
+                    target,
+                    has_display: inner.contains('|'),
+                    wiki: true,
+                });
             }
+            at += close + 4;
+            continue;
         }
-        if bytes[at] == b']' && line[at..].starts_with("](") {
-            if let Some(close) = line[at + 2..].find(')') {
-                let raw = &line[at + 2..at + 2 + close];
-                let raw = raw.split_whitespace().next().unwrap_or("");
-                let path = raw.split('#').next().unwrap_or("");
-                if path.to_ascii_lowercase().ends_with(".md") && !path.contains("://") {
-                    visit(Link {
-                        start: offset + at + 2,
-                        end: offset + at + 2 + path.len(),
-                        target: path,
-                        has_display: true,
-                        wiki: false,
-                    });
-                }
-                at += close + 3;
-                continue;
+        if bytes[at] == b']'
+            && line[at..].starts_with("](")
+            && let Some(close) = line[at + 2..].find(')')
+        {
+            let raw = &line[at + 2..at + 2 + close];
+            let raw = raw.split_whitespace().next().unwrap_or("");
+            let path = raw.split('#').next().unwrap_or("");
+            if path.to_ascii_lowercase().ends_with(".md") && !path.contains("://") {
+                visit(Link {
+                    start: offset + at + 2,
+                    end: offset + at + 2 + path.len(),
+                    target: path,
+                    has_display: true,
+                    wiki: false,
+                });
             }
+            at += close + 3;
+            continue;
         }
         at += line[at..].chars().next().map_or(1, char::len_utf8);
     }
@@ -185,15 +186,15 @@ fn decode(text: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Some(byte) = text
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(byte) = text
                 .get(i + 1..i + 3)
                 .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-            {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
+        {
+            out.push(byte);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;

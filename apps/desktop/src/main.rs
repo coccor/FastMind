@@ -1,0 +1,357 @@
+//! FastMind for the desktop: one process in the tray (menu bar on macOS) that owns the hotkeys,
+//! the capture window, the main window and Dream's nightly run. All the work happens in
+//! `fastmind-core`; this file wires it to the operating system.
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use chrono::{Local, NaiveTime};
+use fastmind_core::api::App;
+use fastmind_core::config::Settings;
+use fastmind_core::dream;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+struct Core(Arc<App>);
+
+/// The one command the UI calls: every FastMind command by name, run off the UI thread.
+#[tauri::command]
+async fn call(
+    core: tauri::State<'_, Core>,
+    app: AppHandle,
+    name: String,
+    args: Value,
+) -> Result<Value, String> {
+    let core = core.0.clone();
+    let changes = matches!(
+        name.as_str(),
+        "capture"
+            | "dream_run"
+            | "dream_apply"
+            | "dream_apply_all"
+            | "dream_undo"
+            | "undo"
+            | "archive_restore"
+            | "archive_note"
+            | "inbox_keep"
+            | "demo_create"
+            | "settings_set"
+    );
+    let from_capture_window = name == "capture";
+    let result = tauri::async_runtime::spawn_blocking(move || core.call(&name, args))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.0);
+    if result.is_ok() && changes {
+        // The other window refreshes; the capture window's save shows up in the main one.
+        let _ = app.emit("changed", ());
+        if from_capture_window {
+            update_tray(&app);
+        }
+    }
+    result
+}
+
+/// Opens a note in the system's editor for Markdown. Only files inside the notebook.
+#[tauri::command]
+fn open_path(core: tauri::State<'_, Core>, path: String) -> Result<(), String> {
+    let notebook = core.0.notebook().map_err(|e| e.0)?;
+    let path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let root = notebook.root.canonicalize().map_err(|e| e.to_string())?;
+    if !path.starts_with(&root) {
+        return Err("only notes inside the notebook can be opened".into());
+    }
+    opener::open(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn hide_capture(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("capture") {
+        let _ = window.hide();
+    }
+}
+
+fn show_main(app: &AppHandle, view: Option<&str>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        match view {
+            Some("remember") => {
+                let _ = app.emit("focus-remember", ());
+            }
+            Some(view) => {
+                let _ = app.emit("show-view", view);
+            }
+            None => {}
+        }
+    }
+}
+
+fn show_capture(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("capture") {
+        if window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false) {
+            let _ = window.hide();
+            return;
+        }
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = app.emit_to("capture", "capture-shown", ());
+    }
+}
+
+fn open_notebook_folder(app: &AppHandle) {
+    let core = app.state::<Core>();
+    if let Ok(notebook) = core.0.notebook() {
+        let _ = opener::open(&notebook.root);
+    }
+}
+
+/// Runs Dream in the background and tells the windows when it's done.
+fn dream_now(app: &AppHandle) {
+    let core = app.state::<Core>().0.clone();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let result = core.call("dream_run", json!({}));
+        let _ = app.emit("changed", ());
+        update_tray(&app);
+        if let Err(error) = result {
+            eprintln!("Dream failed: {error}");
+        }
+    });
+}
+
+/// The tray tooltip says what's waiting: inbox notes and Dream's proposals.
+fn update_tray(app: &AppHandle) {
+    let core = app.state::<Core>().0.clone();
+    let Some(tray) = app.tray_by_id("fastmind") else {
+        return;
+    };
+    let tip = match core.call("status", json!({})) {
+        Ok(status) => {
+            let inbox = status["inbox"].as_u64().unwrap_or(0);
+            let pending = status["dream"]["pending"].as_u64().unwrap_or(0);
+            let mut parts = vec![format!("{} notes", status["notes"].as_u64().unwrap_or(0))];
+            if inbox > 0 {
+                parts.push(format!("{inbox} in the inbox"));
+            }
+            if pending > 0 {
+                parts.push(format!("Dream has {pending} proposals"));
+            }
+            format!("FastMind · {}", parts.join(" · "))
+        }
+        Err(_) => "FastMind".to_owned(),
+    };
+    let _ = tray.set_tooltip(Some(tip));
+}
+
+fn within(now: NaiveTime, start: &str, end: &str) -> bool {
+    let (Ok(start), Ok(end)) = (
+        NaiveTime::parse_from_str(start, "%H:%M"),
+        NaiveTime::parse_from_str(end, "%H:%M"),
+    ) else {
+        return false;
+    };
+    if start <= end {
+        now >= start && now < end
+    } else {
+        now >= start || now < end
+    }
+}
+
+/// Once a night, inside the window set in Settings, Dream looks over the notebook. It only
+/// proposes, apart from the kinds the user lets it apply on its own.
+fn nightly(app: AppHandle) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(300));
+            let core = app.state::<Core>().0.clone();
+            let settings = core.settings();
+            if !settings.dream.nightly {
+                continue;
+            }
+            let now = Local::now();
+            if !within(
+                now.time(),
+                &settings.dream.window_start,
+                &settings.dream.window_end,
+            ) {
+                continue;
+            }
+            let Ok(notebook) = core.notebook() else {
+                continue;
+            };
+            let dreamed_recently = dream::latest(&notebook)
+                .is_some_and(|report| now - report.ran_at < chrono::Duration::hours(12));
+            if dreamed_recently {
+                continue;
+            }
+            let _ = core.call("dream_run", json!({}));
+            let _ = app.emit("changed", ());
+            update_tray(&app);
+        }
+    });
+}
+
+fn register_hotkeys(app: &AppHandle, settings: &Settings) {
+    let shortcuts = app.global_shortcut();
+    for (name, keys) in [
+        ("capture", &settings.hotkeys.capture),
+        ("remember", &settings.hotkeys.remember),
+    ] {
+        if keys.trim().is_empty() {
+            continue;
+        }
+        match keys.parse::<Shortcut>() {
+            Ok(shortcut) => {
+                if let Err(error) = shortcuts.register(shortcut) {
+                    eprintln!("The {name} hotkey {keys} is taken or not allowed: {error}");
+                }
+            }
+            Err(error) => eprintln!("The {name} hotkey {keys} isn't a valid shortcut: {error}"),
+        }
+    }
+}
+
+fn main() {
+    let settings = Settings::load();
+    let capture_keys: Option<Shortcut> = settings.hotkeys.capture.parse().ok();
+    let remember_keys: Option<Shortcut> = settings.hotkeys.remember.parse().ok();
+    let start_hidden = std::env::args().any(|arg| arg == "--hidden");
+    let core = Arc::new(App::new(settings.clone()));
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app, None)
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if Some(shortcut) == capture_keys.as_ref() {
+                        show_capture(app);
+                    } else if Some(shortcut) == remember_keys.as_ref() {
+                        show_main(app, Some("remember"));
+                    }
+                })
+                .build(),
+        )
+        .manage(Core(core))
+        .invoke_handler(tauri::generate_handler![call, open_path, hide_capture])
+        .setup(move |app| {
+            let handle = app.handle().clone();
+
+            WebviewWindowBuilder::new(
+                app,
+                "capture",
+                WebviewUrl::App("index.html?mode=capture".into()),
+            )
+            .title("FastMind · Capture")
+            .inner_size(560.0, 300.0)
+            .resizable(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .center()
+            .build()?;
+
+            let capture = MenuItem::with_id(app, "capture", "Capture…", true, None::<&str>)?;
+            let remember = MenuItem::with_id(app, "remember", "Remember…", true, None::<&str>)?;
+            let dream = MenuItem::with_id(app, "dream", "Dream now", true, None::<&str>)?;
+            let show_dream =
+                MenuItem::with_id(app, "show-dream", "Dream's proposals", true, None::<&str>)?;
+            let folder =
+                MenuItem::with_id(app, "folder", "Open notebook folder", true, None::<&str>)?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit FastMind", true, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let separator2 = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &capture,
+                    &remember,
+                    &separator,
+                    &dream,
+                    &show_dream,
+                    &separator2,
+                    &folder,
+                    &settings_item,
+                    &quit,
+                ],
+            )?;
+            let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+            TrayIconBuilder::with_id("fastmind")
+                .icon(icon)
+                .tooltip("FastMind")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "capture" => show_capture(app),
+                    "remember" => show_main(app, Some("remember")),
+                    "dream" => dream_now(app),
+                    "show-dream" => show_main(app, Some("dream")),
+                    "folder" => open_notebook_folder(app),
+                    "settings" => show_main(app, Some("settings")),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main(tray.app_handle(), None);
+                    }
+                })
+                .build(app)?;
+
+            register_hotkeys(&handle, &settings);
+            update_tray(&handle);
+            nightly(handle.clone());
+            if !start_hidden {
+                show_main(&handle, None);
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing a window keeps FastMind running in the tray.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("FastMind failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dream_window_wraps_midnight() {
+        let at = |text: &str| NaiveTime::parse_from_str(text, "%H:%M").unwrap();
+        assert!(within(at("03:00"), "02:00", "06:00"));
+        assert!(!within(at("07:00"), "02:00", "06:00"));
+        assert!(within(at("23:30"), "23:00", "05:00"));
+        assert!(within(at("01:00"), "23:00", "05:00"));
+        assert!(!within(at("12:00"), "23:00", "05:00"));
+    }
+}

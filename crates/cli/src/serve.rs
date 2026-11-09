@@ -20,7 +20,12 @@ pub fn serve(app: &App, port: u16, ui: Option<PathBuf>) -> Result<(), String> {
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
                 let args: Value = serde_json::from_str(&body).unwrap_or(json!({}));
-                let (status, value) = match app.call(command, args) {
+                let result = if command == "os_open" {
+                    open_in_editor(app, &args)
+                } else {
+                    app.call(command, args)
+                };
+                let (status, value) = match result {
                     Ok(value) => (200, json!({ "ok": value })),
                     Err(error) => (400, json!({ "error": error.0 })),
                 };
@@ -46,6 +51,27 @@ pub fn serve(app: &App, port: u16, ui: Option<PathBuf>) -> Result<(), String> {
         let _ = request.respond(response);
     }
     Ok(())
+}
+
+/// Opens a note in the system's default editor. Only files inside the notebook, so a page can't
+/// ask the server to launch anything else.
+fn open_in_editor(app: &App, args: &Value) -> fastmind_core::Result<Value> {
+    let path = std::path::PathBuf::from(args["path"].as_str().unwrap_or_default());
+    let notebook = app.notebook()?;
+    let path = path
+        .canonicalize()
+        .map_err(|e| fastmind_core::Error::msg(e.to_string()))?;
+    let root = notebook
+        .root
+        .canonicalize()
+        .map_err(|e| fastmind_core::Error::msg(e.to_string()))?;
+    if !path.starts_with(&root) {
+        return Err(fastmind_core::Error::msg(
+            "only notes inside the notebook can be opened",
+        ));
+    }
+    opener::open(&path).map_err(|e| fastmind_core::Error::msg(e.to_string()))?;
+    Ok(json!({ "opened": path }))
 }
 
 fn header(name: &str, value: &str) -> Header {

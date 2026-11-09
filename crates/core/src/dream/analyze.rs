@@ -309,7 +309,7 @@ pub fn naming_title(
         .flat_map(|m| features[*m].vector.keys().cloned())
         .collect::<HashSet<_>>()
         .into_iter()
-        .filter(|term| *term != head && presence(term) * 2 >= members.len() + 1)
+        .filter(|term| *term != head && presence(term) * 2 > members.len())
         .collect();
     // A tag most of the notes carry names their subject best.
     let mut tag_count: HashMap<String, usize> = HashMap::new();

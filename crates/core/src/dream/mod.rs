@@ -1034,7 +1034,7 @@ fn retarget_all(
         };
         let front = crate::frontmatter::parse(&text);
         let body = &text[front.body_start..];
-        let changed = links::retarget(body, &points_to, new_stem);
+        let changed = links::retarget(body, points_to, new_stem);
         let new_text = format!("{}{}", &text[..front.body_start], changed);
         if new_text != note.text {
             tx.write(&note.path, new_text.as_bytes())?;

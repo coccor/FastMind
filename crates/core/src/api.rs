@@ -147,7 +147,7 @@ impl App {
             }
             "archive_list" => {
                 let mut items = ArchiveIndex::load(&nb).items;
-                items.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+                items.sort_by_key(|item| std::cmp::Reverse(item.archived_at));
                 json!({ "items": items, "disk_bytes": archive::disk_size(&nb) })
             }
             "archive_restore" => {
@@ -309,7 +309,7 @@ impl App {
 
     fn recent(&self, nb: &Notebook, limit: usize) -> Vec<Value> {
         let mut notes = nb.notes();
-        notes.sort_by(|a, b| b.touched.cmp(&a.touched));
+        notes.sort_by_key(|note| std::cmp::Reverse(note.touched));
         notes
             .iter()
             .take(limit)

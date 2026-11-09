@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What FastMind's own windows may do: call the app's commands and listen to its events.",
+  "windows": ["main", "capture"],
+  "permissions": ["core:default"]
+}

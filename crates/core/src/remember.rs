@@ -122,13 +122,17 @@ pub fn ask(nb: &Notebook, index: &Index, question: &str, model: Option<&Model>) 
     let mut scored: Vec<(f64, usize, String)> = Vec::new();
     for (source, body) in sources.iter().zip(&bodies) {
         for raw in body.split(['\n']) {
+            // Headings name a note; they don't answer anything.
+            if raw.trim_start().starts_with('#') {
+                continue;
+            }
             for sentence in split_sentences(raw) {
                 let sentence = sentence
                     .trim()
                     .trim_start_matches(['#', '-', '*', '>', ' '])
                     .trim();
                 let count = text::words(sentence).count();
-                if count < 3 || count > 60 {
+                if !(3..=60).contains(&count) {
                     continue;
                 }
                 let terms: HashSet<String> = text::terms(sentence).into_iter().collect();

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux packages for the desktop app (webview, tray, hotkeys)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build the desktop app and the CLI
+        run: cargo build --workspace --release
+
+      - name: Scenario walk-through with the CLI
+        shell: bash
+        run: |
+          export FASTMIND_CONFIG="$RUNNER_TEMP/fastmind/settings.json"
+          bin=target/release/fastmind
+          $bin demo "$RUNNER_TEMP/fastmind/demo"
+          $bin capture "Cross-platform capture from $RUNNER_OS #ci"
+          $bin search "cross-platform capture"
+          $bin ask "what does a failing liveness probe do?"
+          $bin dream
+          $bin dream apply all
+          $bin status
+          $bin archive
+          $bin history
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastmind-${{ runner.os }}
+          path: |
+            target/release/fastmind
+            target/release/fastmind.exe
+            target/release/fastmind-desktop
+            target/release/fastmind-desktop.exe
+            apps/desktop/ui
+          if-no-files-found: ignore
+          retention-days: 14

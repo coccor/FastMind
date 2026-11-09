@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FastMind</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- The small capture window (opened by the capture hotkey) uses only this part. -->
+  <section id="capture-only" class="capture-only" hidden>
+    <form id="capture-form-mini" class="capture-box">
+      <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ inbox</span></div>
+      <textarea id="capture-text-mini" placeholder="What do you want to keep? A thought, a link, a fix… #tags work" autofocus></textarea>
+      <div class="capture-footer">
+        <span class="muted small" id="capture-hint-mini">Ctrl+Enter saves · Esc closes</span>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <div id="app" class="app" hidden>
+    <nav class="sidebar">
+      <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span>FastMind</span></div>
+      <button class="nav" data-view="remember"><span class="ico">⌕</span>Remember</button>
+      <button class="nav" data-view="inbox"><span class="ico">✎</span>Inbox <span class="badge" id="badge-inbox"></span></button>
+      <button class="nav" data-view="dream"><span class="ico">☾</span>Dream <span class="badge" id="badge-dream"></span></button>
+      <button class="nav" data-view="archive"><span class="ico">▤</span>Archive</button>
+      <button class="nav" data-view="history"><span class="ico">↶</span>History</button>
+      <button class="nav" data-view="settings"><span class="ico">⚙</span>Settings</button>
+      <div class="sidebar-foot">
+        <button id="capture-open" class="primary wide">+ Capture</button>
+        <div class="muted small" id="notebook-line"></div>
+      </div>
+    </nav>
+
+    <main class="main">
+      <!-- Remember -->
+      <section class="view" id="view-remember">
+        <header class="view-head">
+          <h1>Remember</h1>
+          <p class="muted">Find a note, or ask your notebook a question. End with <kbd>?</kbd> or press <kbd>Ctrl+Enter</kbd> to ask.</p>
+        </header>
+        <div class="search-row">
+          <input id="query" type="search" placeholder="Search notes, #tags, or ask a question…" autocomplete="off" spellcheck="false">
+          <button id="ask-button">Ask</button>
+        </div>
+        <div id="answer" class="answer" hidden></div>
+        <div class="split">
+          <ul id="results" class="results"></ul>
+          <article id="reader" class="reader" hidden></article>
+        </div>
+      </section>
+
+      <!-- Inbox -->
+      <section class="view" id="view-inbox" hidden>
+        <header class="view-head">
+          <h1>Inbox</h1>
+          <p class="muted">What you captured and haven't dealt with. Keep it, archive it, or let Dream gather it overnight.</p>
+        </header>
+        <ul id="inbox-list" class="cards"></ul>
+      </section>
+
+      <!-- Dream -->
+      <section class="view" id="view-dream" hidden>
+        <header class="view-head row">
+          <div>
+            <h1>Dream</h1>
+            <p class="muted">While you sleep, Dream compresses the notebook: it merges copies, gathers fragments, retires what nothing uses and packs old archives. It proposes; you decide. Everything can be undone.</p>
+          </div>
+          <button id="dream-now" class="primary">Dream now</button>
+        </header>
+        <div id="dream-summary" class="summary-card"></div>
+        <div id="dream-actions" class="toolbar" hidden>
+          <button id="dream-accept-all" class="primary">Accept all</button>
+          <span class="muted small" id="dream-pending-line"></span>
+        </div>
+        <ul id="proposals" class="cards"></ul>
+      </section>
+
+      <!-- Archive -->
+      <section class="view" id="view-archive" hidden>
+        <header class="view-head">
+          <h1>Archive</h1>
+          <p class="muted">Notes that left the notebook. They're still searchable (ranked lower) and come back with one click, even from a pack.</p>
+        </header>
+        <div id="archive-line" class="muted"></div>
+        <ul id="archive-list" class="cards"></ul>
+      </section>
+
+      <!-- History -->
+      <section class="view" id="view-history" hidden>
+        <header class="view-head">
+          <h1>History</h1>
+          <p class="muted">Every change FastMind made to your notes. Undo puts the files back as they were, unless you've edited them since.</p>
+        </header>
+        <ul id="history-list" class="cards compact"></ul>
+      </section>
+
+      <!-- Settings -->
+      <section class="view" id="view-settings" hidden>
+        <header class="view-head">
+          <h1>Settings</h1>
+          <p class="muted small" id="settings-file"></p>
+        </header>
+        <form id="settings-form" class="settings">
+          <fieldset>
+            <legend>Notebook</legend>
+            <label>Folder <input name="notebook" placeholder="~/FastMind"></label>
+            <label>Captures go to <input name="inbox"></label>
+            <div class="row gap">
+              <button type="button" id="make-demo">Try a demo notebook</button>
+              <span class="muted small">Makes a messy notebook beside your home folder (FastMind Demo) and switches to it.</span>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Hotkeys</legend>
+            <label>Capture <input name="hotkey_capture"></label>
+            <label>Remember <input name="hotkey_remember"></label>
+            <p class="muted small">Desktop app only. Applied after a restart.</p>
+          </fieldset>
+          <fieldset>
+            <legend>Dream</legend>
+            <label class="check"><input type="checkbox" name="nightly"> Dream every night between
+              <input name="window_start" class="tiny"> and <input name="window_end" class="tiny"></label>
+            <label>Archive notes nothing uses after <input name="stale_days" type="number" min="7" class="tiny"> days</label>
+            <label>Archive notes marked done after <input name="done_days" type="number" min="1" class="tiny"> days</label>
+            <label>Pack archived notes after <input name="pack_after_days" type="number" min="1" class="tiny"> days</label>
+            <label>Keep undo for <input name="undo_days" type="number" min="1" class="tiny"> days</label>
+            <div class="checks">
+              <span class="muted">Apply without asking:</span>
+              <label class="check"><input type="checkbox" name="auto" value="pack"> packing</label>
+              <label class="check"><input type="checkbox" name="auto" value="fix_link"> link fixes</label>
+              <label class="check"><input type="checkbox" name="auto" value="archive"> archiving</label>
+              <label class="check"><input type="checkbox" name="auto" value="merge"> merges</label>
+              <label class="check"><input type="checkbox" name="auto" value="topic"> topics</label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Model</legend>
+            <p class="muted small">Optional. Without one, Dream and Remember work from text statistics alone and nothing leaves this computer.</p>
+            <label>Provider
+              <select name="provider">
+                <option value="none">None (offline)</option>
+                <option value="local">Local server (Ollama, LM Studio…)</option>
+                <option value="claude">Claude (needs ANTHROPIC_API_KEY)</option>
+              </select>
+            </label>
+            <label>Model <input name="model" placeholder="llama3.2 / claude-opus-5-5"></label>
+            <label>Server <input name="base_url" placeholder="http://localhost:11434/v1"></label>
+          </fieldset>
+          <div class="row gap"><button class="primary" type="submit">Save settings</button><span id="settings-saved" class="muted small"></span></div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <!-- Capture dialog inside the main window -->
+  <dialog id="capture-dialog" class="capture-dialog">
+    <form id="capture-form" class="capture-box" method="dialog">
+      <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ inbox</span></div>
+      <textarea id="capture-text" placeholder="What do you want to keep? A thought, a link, a fix… #tags work"></textarea>
+      <div class="capture-footer">
+        <span class="muted small">Ctrl+Enter saves · Esc closes</span>
+        <span><button type="button" id="capture-cancel">Cancel</button> <button type="submit" class="primary">Save</button></span>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

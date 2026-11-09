@@ -1,5 +1,6 @@
 //! FastMind's settings, in one JSON file in the user's config folder
-//! (`%AppData%\FastMind`, `~/Library/Application Support/FastMind`, `~/.config/fastmind`).
+//! (`%AppData%\coccor\FastMind\config`, `~/Library/Application Support/dev.coccor.FastMind`,
+//! `~/.config/fastmind`).
 //! `FASTMIND_CONFIG` points somewhere else, which tests and portable installs use.
 
 use crate::model::ModelSettings;

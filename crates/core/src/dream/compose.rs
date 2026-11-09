@@ -42,10 +42,10 @@ fn new_paragraphs(
     let mut kept = Vec::new();
     for paragraph in paragraphs(note.body()) {
         let trimmed = paragraph.trim();
-        if let Some(heading) = trimmed.strip_prefix("# ") {
-            if heading.trim().eq_ignore_ascii_case(&note.title) || !trimmed.contains('\n') {
-                continue;
-            }
+        if let Some(heading) = trimmed.strip_prefix("# ")
+            && (heading.trim().eq_ignore_ascii_case(&note.title) || !trimmed.contains('\n'))
+        {
+            continue;
         }
         let normal = text::normalize(trimmed);
         if normal.is_empty() || known.contains(&normal) {

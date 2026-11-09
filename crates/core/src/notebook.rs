@@ -266,13 +266,13 @@ pub fn backlinks(notes: &[Note]) -> HashMap<String, Vec<String>> {
     let mut inbound: HashMap<String, Vec<String>> = HashMap::new();
     for note in notes {
         for target in &note.links {
-            if let Some(to) = resolver.resolve(target) {
-                if to != note.path {
-                    inbound
-                        .entry(to.to_owned())
-                        .or_default()
-                        .push(note.path.clone());
-                }
+            if let Some(to) = resolver.resolve(target)
+                && to != note.path
+            {
+                inbound
+                    .entry(to.to_owned())
+                    .or_default()
+                    .push(note.path.clone());
             }
         }
     }
