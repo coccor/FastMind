@@ -131,6 +131,11 @@ pub fn ask(nb: &Notebook, index: &Index, question: &str, model: Option<&Model>) 
                     .trim()
                     .trim_start_matches(['#', '-', '*', '>', ' '])
                     .trim();
+                // A line that is only a link points elsewhere; it doesn't answer.
+                let without_links = strip_links(sentence);
+                if text::words(&without_links).count() < 3 {
+                    continue;
+                }
                 let count = text::words(sentence).count();
                 if !(3..=60).contains(&count) {
                     continue;
@@ -184,6 +189,22 @@ pub fn ask(nb: &Notebook, index: &Index, question: &str, model: Option<&Model>) 
         by_model: false,
         note,
     }
+}
+
+fn strip_links(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("]]") {
+            Some(end) => rest = &rest[start + end + 2..],
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn split_sentences(line: &str) -> Vec<&str> {

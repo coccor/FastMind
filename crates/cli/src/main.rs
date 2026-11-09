@@ -460,7 +460,14 @@ fn show_report(report: &Value) {
     {
         println!("\nModel: {}", s(&note));
     }
-    println!("\nApply one with `fastmind dream apply p1`, or all with `fastmind dream apply all`.");
+    let pending = report["proposals"].as_array().map_or(0, |all| {
+        all.iter().filter(|p| p["status"] == "pending").count()
+    });
+    if pending > 0 {
+        println!(
+            "\nApply one with `fastmind dream apply p1`, or all with `fastmind dream apply all`."
+        );
+    }
 }
 
 fn human(bytes: u64) -> String {
