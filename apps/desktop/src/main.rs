@@ -55,6 +55,8 @@ async fn call(
         }
         if settings_changed {
             apply_autostart(&app);
+            let settings = app.state::<Core>().0.settings();
+            register_hotkeys(&app, &settings);
         }
     }
     result
@@ -250,15 +252,51 @@ fn nightly(app: AppHandle) {
             if dreamed_recently {
                 continue;
             }
-            let _ = core.call("dream_run", json!({}));
+            if let Ok(result) = core.call("dream_run", json!({})) {
+                notify_dream(&app, &result["report"]);
+            }
             let _ = app.emit("changed", ());
             update_tray(&app);
         }
     });
 }
 
+/// The shortcuts in use, read by the handler, so changing them in Settings works at once.
+#[derive(Default)]
+struct Keys(std::sync::Mutex<(Option<Shortcut>, Option<Shortcut>)>);
+
+/// After a nightly Dream with something to review: one quiet notification, read in the morning.
+fn notify_dream(app: &AppHandle, report: &Value) {
+    use tauri_plugin_notification::NotificationExt;
+    let proposals = report["proposals"].as_array().cloned().unwrap_or_default();
+    let pending = proposals
+        .iter()
+        .filter(|p| p["status"] == "pending")
+        .count();
+    if pending == 0 {
+        return;
+    }
+    let before = report["before"]["notes"].as_u64().unwrap_or(0);
+    let removed: u64 = proposals
+        .iter()
+        .map(|p| p["notes_removed"].as_u64().unwrap_or(0))
+        .sum();
+    let _ = app
+        .notification()
+        .builder()
+        .title("While you slept")
+        .body(format!(
+            "Dream can take your notebook from {before} to {} notes. {pending} proposal{} to review.",
+            before.saturating_sub(removed),
+            if pending == 1 { "" } else { "s" }
+        ))
+        .show();
+}
+
 fn register_hotkeys(app: &AppHandle, settings: &Settings) {
     let shortcuts = app.global_shortcut();
+    let _ = shortcuts.unregister_all();
+    let mut active = (None, None);
     for (name, keys) in [
         ("capture", &settings.hotkeys.capture),
         ("remember", &settings.hotkeys.remember),
@@ -267,25 +305,32 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) {
             continue;
         }
         match keys.parse::<Shortcut>() {
-            Ok(shortcut) => {
-                if let Err(error) = shortcuts.register(shortcut) {
-                    eprintln!("The {name} hotkey {keys} is taken or not allowed: {error}");
+            Ok(shortcut) => match shortcuts.register(shortcut) {
+                Ok(()) => {
+                    if name == "capture" {
+                        active.0 = Some(shortcut);
+                    } else {
+                        active.1 = Some(shortcut);
+                    }
                 }
-            }
+                Err(error) => {
+                    eprintln!("The {name} hotkey {keys} is taken or not allowed: {error}")
+                }
+            },
             Err(error) => eprintln!("The {name} hotkey {keys} isn't a valid shortcut: {error}"),
         }
     }
+    *app.state::<Keys>().0.lock().expect("keys lock") = active;
 }
 
 fn main() {
     let settings = Settings::load();
-    let capture_keys: Option<Shortcut> = settings.hotkeys.capture.parse().ok();
-    let remember_keys: Option<Shortcut> = settings.hotkeys.remember.parse().ok();
     let start_hidden = std::env::args().any(|arg| arg == "--hidden");
     let core = Arc::new(App::new(settings.clone()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app, None)
         }))
@@ -299,15 +344,17 @@ fn main() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if Some(shortcut) == capture_keys.as_ref() {
+                    let (capture, remember) = *app.state::<Keys>().0.lock().expect("keys lock");
+                    if Some(*shortcut) == capture {
                         show_capture(app);
-                    } else if Some(shortcut) == remember_keys.as_ref() {
+                    } else if Some(*shortcut) == remember {
                         show_main(app, Some("remember"));
                     }
                 })
                 .build(),
         )
         .manage(Core(core))
+        .manage(Keys::default())
         .invoke_handler(tauri::generate_handler![
             call,
             open_path,

@@ -108,7 +108,7 @@ impl App {
         // These don't need the notebook, so they never create its folder.
         if matches!(
             name,
-            "settings_get" | "settings_set" | "demo_create" | "first_run" | "setup"
+            "settings_get" | "settings_set" | "demo_create" | "first_run" | "setup" | "agent_setup"
         ) {
             return self.call_without_notebook(name, args);
         }
