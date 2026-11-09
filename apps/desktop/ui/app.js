@@ -176,7 +176,7 @@ async function loadHome() {
   } else {
     const kinds = Object.entries(d.kinds || {}).map(([k, n]) => `${n} ${({ merge: "to merge", topic: "to gather", archive: "to archive", fixlink: n === 1 ? "link to fix" : "links to fix", pack: "to pack" })[k] || k}`).join(" · ");
     dream.innerHTML = `<div class="home-title">☾ While you slept <span class="muted small">${esc(ago(d.ran_at))}</span></div>
-      <div class="stats compact"><div class="stat"><div class="num">${d.before}<span class="arrow">→</span>${d.after}</div><div class="label">notes, if you accept everything</div></div></div>
+      <div class="stats compact"><div class="stat"><div class="num">${d.before}<span class="arrow">→</span>${d.after}</div><div class="label">${d.pending ? "notes, if you accept everything" : "notes after Dream"}</div></div></div>
       <p class="muted">${d.pending ? `${d.pending} proposals waiting: ${esc(kinds)}.` : "Nothing waiting. The notebook is tidy."}${d.applied ? ` ${d.applied} already applied.` : ""}</p>
       <div class="row gap">${d.pending ? `<button class="primary" data-go="dream">Review ${d.pending}</button>` : `<button data-go="dream">See what Dream did</button>`}</div>`;
   }

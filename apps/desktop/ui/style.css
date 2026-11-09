@@ -237,3 +237,8 @@ legend { font-weight: 650; padding: 0 6px; }
 .agent-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
 .agent-row .muted { grid-column: 1 / -1; }
 .agent-row code { font: 12px ui-monospace, monospace; background: var(--bg); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; }
+
+/* Light accent in the dark: dark text reads better on it than white. Last, so it wins. */
+@media (prefers-color-scheme: dark) {
+  button.primary, .badge { color: #14121f; }
+}
