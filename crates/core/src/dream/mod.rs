@@ -219,6 +219,7 @@ pub fn run(
     let protected = |note: &Note| {
         note.is_home()
             || note.is_pinned()
+            || note.is_template()
             || matches!(
                 note.stem().to_ascii_lowercase().as_str(),
                 "readme" | "index" | "home"
@@ -229,7 +230,7 @@ pub fn run(
     // 1. Duplicates: notes that say the same thing. The best-connected copy stays.
     let allowed: Vec<bool> = notes
         .iter()
-        .map(|note| !protected(note) && !recent(note))
+        .map(|note| !protected(note) && !recent(note) && !note.is_record())
         .collect();
     let mut groups = analyze::UnionFind::new(notes.len());
     let mut best_similarity: HashMap<(usize, usize), f64> = HashMap::new();
@@ -396,6 +397,9 @@ pub fn run(
         let status = note.status();
         let reason = if features[index].words < 3 && note.links.is_empty() && idle >= 1 {
             Some("It's empty: no text worth keeping and no links.".to_owned())
+        } else if note.is_record() {
+            // Daily notes, meetings and logs are history, kept however old.
+            None
         } else if DONE.contains(&status.as_str()) && idle >= settings.done_days {
             Some(format!(
                 "Marked \"{status}\" and untouched for {idle} days, and no note links to it."
@@ -575,6 +579,8 @@ pub fn run(
         });
     }
 
+    let skips = skipped(nb);
+    proposals.retain(|proposal| !skips.contains(&signature(proposal)));
     for (n, proposal) in proposals.iter_mut().enumerate() {
         proposal.id = format!("p{}", n + 1);
     }
@@ -768,10 +774,50 @@ pub fn reject(nb: &Notebook, id: &str) -> Result<Proposal> {
         .ok_or_else(|| Error::msg(format!("no proposal {id}")))?;
     if proposal.status == Status::Pending {
         proposal.status = Status::Rejected;
+        remember_skip(nb, proposal)?;
     }
     let result = proposal.clone();
     save(nb, &report)?;
     Ok(result)
+}
+
+/// What a proposal is about, independent of the night it was made: its kind and its notes.
+/// A skipped proposal with the same signature isn't made again. When the notes change (a new
+/// copy turns up), the signature changes and Dream may ask again.
+pub fn signature(proposal: &Proposal) -> String {
+    let mut notes = proposal.notes.clone();
+    notes.sort();
+    format!("{:?}:{}", proposal.kind, notes.join("|"))
+}
+
+fn skipped_file(nb: &Notebook) -> std::path::PathBuf {
+    dream_dir(nb).join("skipped.json")
+}
+
+fn skipped(nb: &Notebook) -> HashSet<String> {
+    fs::read(skipped_file(nb))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+fn remember_skip(nb: &Notebook, proposal: &Proposal) -> Result<()> {
+    let mut all: Vec<String> = skipped(nb).into_iter().collect();
+    all.push(signature(proposal));
+    all.sort();
+    all.dedup();
+    fsx::write_atomic(&skipped_file(nb), &serde_json::to_vec_pretty(&all)?)
+}
+
+/// Forgets every skip, so Dream may propose them again.
+pub fn forget_skips(nb: &Notebook) -> Result<()> {
+    let path = skipped_file(nb);
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 /// Applies every pending proposal of the given kinds (all kinds when empty), in order.

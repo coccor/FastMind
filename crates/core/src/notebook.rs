@@ -65,6 +65,45 @@ impl Note {
         HOME_TYPES.contains(&self.note_type().as_str())
     }
 
+    /// A template: in a templates folder or `type: template`. A tool, not a note.
+    pub fn is_template(&self) -> bool {
+        self.note_type() == "template"
+            || self.path.split('/').rev().skip(1).any(|folder| {
+                matches!(
+                    folder.to_ascii_lowercase().as_str(),
+                    "templates" | "_templates" | "template"
+                )
+            })
+    }
+
+    /// A record of a day or an event (daily notes, journals, meetings, logs). Records are
+    /// history: Dream never retires them for being old.
+    pub fn is_record(&self) -> bool {
+        let kind = self.note_type();
+        if matches!(
+            kind.as_str(),
+            "daily" | "journal" | "meeting" | "log" | "diary" | "weekly"
+        ) {
+            return true;
+        }
+        let stem = self.stem();
+        let dated = stem.len() >= 10
+            && stem.as_bytes()[..10]
+                .iter()
+                .enumerate()
+                .all(|(i, b)| match i {
+                    4 | 7 => *b == b'-' || *b == b'.' || *b == b'_',
+                    _ => b.is_ascii_digit(),
+                });
+        dated
+            || self.path.split('/').rev().skip(1).any(|folder| {
+                matches!(
+                    folder.to_ascii_lowercase().as_str(),
+                    "daily" | "journal" | "journals" | "diary" | "dailies" | "daily notes"
+                )
+            })
+    }
+
     /// Pinned notes are never archived or merged away.
     pub fn is_pinned(&self) -> bool {
         let yes = |key: &str| {

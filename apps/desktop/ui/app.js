@@ -327,7 +327,7 @@ function renderDream(report) {
       const freed = p.bytes_freed + (p.disk_freed || 0);
       const actions =
         p.status === "pending"
-          ? `${p.preview ? '<button data-act="preview">Preview</button>' : ""}<button data-act="reject">Skip</button><button data-act="apply" class="primary">Accept</button>`
+          ? `${p.preview ? '<button data-act="preview">Preview</button>' : ""}${p.kind === "archive" && p.notes[0].endsWith(".md") ? '<button data-act="pin" title="Pin it: Dream never touches it again">Keep forever</button>' : '<button data-act="reject" title="Dream won't propose this again">Skip</button>'}<button data-act="apply" class="primary">Accept</button>`
           : p.status === "applied"
             ? `<span class="status applied">✓ Applied</span><button data-act="undo">Undo</button>`
             : `<span class="status ${p.status}">${p.status === "rejected" ? "Skipped" : "Out of date"}</span>`;
@@ -374,6 +374,11 @@ $("#proposals").addEventListener("click", async (event) => {
       toast(p.status === "applied" ? "Done. Undo is one click away." : `Not applied: ${p.error || p.status}`, p.status !== "applied");
     }
     if (act === "reject") await call("dream_reject", { id });
+    if (act === "pin") {
+      const proposal = ($("#proposals")._report.proposals || []).find((p) => p.id === id);
+      await call("pin_note", { path: proposal.notes[0] });
+      toast("Pinned. Dream will leave it alone.");
+    }
     if (act === "undo") { await call("dream_undo", { id }); toast("Undone. The notes are back as they were."); }
   } catch (error) {
     toast(String(error.message || error), true);

@@ -127,6 +127,28 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "pin_note" => {
+                // Keep forever: Dream never merges, gathers or archives a pinned note.
+                let path: String = arg(&args, "path")?;
+                let note = nb.read(&path)?;
+                let changed = frontmatter::set(&note.text, "pin", &FmValue::Text("true".into()));
+                let mut tx =
+                    Transaction::begin(&nb, format!("Keep \"{}\" forever", note.title), "dream")?;
+                tx.write(&path, changed.as_bytes())?;
+                let entry = tx.commit()?;
+                // Proposals about it are settled: mark them skipped.
+                if let Some(report) = dream::latest(&nb) {
+                    for proposal in report.pending().filter(|p| p.notes.contains(&path)) {
+                        dream::reject(&nb, &proposal.id)?;
+                    }
+                }
+                self.invalidate();
+                json!({ "entry": entry.id })
+            }
+            "dream_forget_skips" => {
+                dream::forget_skips(&nb)?;
+                json!({ "ok": true })
+            }
             "inbox_keep" => {
                 let path: String = arg(&args, "path")?;
                 let note = nb.read(&path)?;
