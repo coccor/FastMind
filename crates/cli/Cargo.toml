@@ -14,3 +14,6 @@ fastmind-core.workspace = true
 serde_json.workspace = true
 tiny_http = "0.12"
 opener = "0.7"
+
+[dev-dependencies]
+tempfile.workspace = true

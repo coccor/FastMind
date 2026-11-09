@@ -233,3 +233,7 @@ legend { font-weight: 650; padding: 0 6px; }
 .option-path { font: 12.5px ui-monospace, monospace; word-break: break-all; }
 #welcome-other input { flex: 1; }
 .welcome-keys kbd { font-size: 12px; }
+
+.agent-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; }
+.agent-row .muted { grid-column: 1 / -1; }
+.agent-row code { font: 12px ui-monospace, monospace; background: var(--bg); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; }

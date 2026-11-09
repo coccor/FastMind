@@ -1,6 +1,7 @@
 //! `fastmind`: the notebook from a terminal or a script. Every command goes through the same
 //! command surface as the desktop app.
 
+mod mcp;
 mod serve;
 
 use fastmind_core::api::App;
@@ -36,6 +37,7 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
   demo [DIR]              Make a messy demo notebook and use it
   serve [--port N] [--ui DIR]
                           Serve the app's UI and API on localhost (for a browser)
+  mcp                     Serve the notebook to coding agents (MCP over stdio)
   settings                Show where settings live and what they are
 
 Options:
@@ -332,6 +334,7 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
                 serde_json::to_string_pretty(&settings).unwrap_or_default()
             );
         }
+        "mcp" => mcp::serve(app).map_err(|e| Failure::Failed(e.to_string()))?,
         "serve" => {
             let port: u16 = take_flag(&mut rest, "--port")
                 .pop()

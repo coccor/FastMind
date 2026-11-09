@@ -738,6 +738,10 @@ async function loadSettings() {
         ? `Found ${ai.claude_code} Claude Code and ${ai.codex} Codex sessions on this computer.`
         : "No Claude Code or Codex sessions found on this computer yet.";
     }).catch(() => {});
+    call("agent_setup").then((agents) => {
+      $("#agent-claude").textContent = agents.claude_code;
+      $("#agent-codex").textContent = agents.codex;
+    }).catch(() => {});
     form.provider.value = settings.model.provider || "none";
     form.model.value = settings.model.model || "";
     form.base_url.value = settings.model.base_url || "";
@@ -782,6 +786,17 @@ $("#settings-form").addEventListener("submit", async (event) => {
     refreshStatus();
   } catch (error) {
     toast(String(error.message || error), true);
+  }
+});
+
+$("#settings-form").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-copy]");
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText($("#" + button.dataset.copy).textContent);
+    toast("Copied");
+  } catch {
+    toast("Couldn't copy; select the text instead", true);
   }
 });
 

@@ -187,6 +187,12 @@
             <div class="row gap"><button type="button" id="ai-import">Import now</button><span class="muted small" id="ai-status"></span></div>
           </fieldset>
           <fieldset>
+            <legend>Connect your coding agents</legend>
+            <p class="muted small">Let Claude Code or Codex search this notebook before they dig into something, and save what they find to your inbox. They talk to FastMind over MCP, on this computer.</p>
+            <div class="agent-row"><span class="muted small">Claude Code (run once in a terminal)</span><code id="agent-claude"></code><button type="button" class="chip" data-copy="agent-claude">Copy</button></div>
+            <div class="agent-row"><span class="muted small">Codex (add to ~/.codex/config.toml)</span><code id="agent-codex"></code><button type="button" class="chip" data-copy="agent-codex">Copy</button></div>
+          </fieldset>
+          <fieldset>
             <legend>Model</legend>
             <p class="muted small">Optional. Without one, Dream and Remember work from text statistics alone and nothing leaves this computer.</p>
             <label>Provider

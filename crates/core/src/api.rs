@@ -433,6 +433,31 @@ impl App {
                 self.replace_settings(settings)?;
                 json!({ "path": path, "notes": report })
             }
+            "agent_setup" => {
+                // The `fastmind` command beside this program, for coding agents to start.
+                let name = if cfg!(windows) {
+                    "fastmind.exe"
+                } else {
+                    "fastmind"
+                };
+                let beside = std::env::current_exe()
+                    .ok()
+                    .map(|exe| exe.with_file_name(name))
+                    .filter(|p| p.exists());
+                let command = beside
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "fastmind".into());
+                let quoted = if command.contains(' ') {
+                    format!("\"{command}\"")
+                } else {
+                    command.clone()
+                };
+                json!({
+                    "command": command,
+                    "claude_code": format!("claude mcp add --scope user fastmind -- {quoted} mcp"),
+                    "codex": format!("[mcp_servers.fastmind]\ncommand = {}\nargs = [\"mcp\"]", serde_json::to_string(&command)?),
+                })
+            }
             "first_run" => {
                 let settings = self.settings();
                 let transcripts =

@@ -1004,6 +1004,7 @@ dependencies = [
  "fastmind-core",
  "opener",
  "serde_json",
+ "tempfile",
  "tiny_http",
 ]
 
