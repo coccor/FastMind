@@ -83,6 +83,10 @@ impl App {
     }
 
     pub fn call(&self, name: &str, args: Value) -> Result<Value> {
+        // These don't need the notebook, so they never create its folder.
+        if matches!(name, "settings_get" | "settings_set" | "demo_create") {
+            return self.call_without_notebook(name, args);
+        }
         let nb = self.notebook()?;
         let now = Local::now();
         Ok(match name {
@@ -228,6 +232,12 @@ impl App {
                 self.invalidate();
                 json!({ "undone": entry.label })
             }
+            other => return Err(Error::msg(format!("unknown command: {other}"))),
+        })
+    }
+
+    fn call_without_notebook(&self, name: &str, args: Value) -> Result<Value> {
+        Ok(match name {
             "settings_get" => {
                 json!({ "settings": self.settings(), "file": crate::config::config_file() })
             }
