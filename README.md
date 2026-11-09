@@ -6,98 +6,114 @@
 
 **Catch it now. Find it later. It tidies itself while you sleep.**
 
-One small app in your tray, on Windows, macOS and Linux, over a folder of plain Markdown notes.
+One small app in your tray, on Windows, macOS and Linux, over a folder of plain Markdown notes,
+and the memory your AI coding sessions never had.
 
 </div>
 
-FastMind does three things a mind does:
+## What it does
 
-- **Capture.** One hotkey from anywhere opens a small box. Type, press **Ctrl+Enter**, and the
-  thought is a note in your inbox. No model, no waiting.
-- **Remember.** Another hotkey searches the whole notebook as you type, typos and all. End with
-  a `?` and it answers from your notes, citing each one it used.
-- **Dream.** At night, Dream compresses the notebook. It merges notes that say the same thing,
-  gathers scattered fragments into one topic note, archives what nothing uses any more, fixes
-  links that point nowhere and packs old archives into zip files. It **proposes**; you accept
-  what you like in the morning. **Every change can be undone.**
+- **Capture from anywhere.** One hotkey opens a small box over whatever you're doing. Type,
+  paste a screenshot or drop a file, press **Ctrl+Enter**, and you're back. A link gets its
+  page's title and description. Esc keeps a draft.
+- **File in one key.** The inbox suggests where each note belongs, from the notes it's most like
+  (a folder, or a topic note that gets a link to it). **Enter** files it there.
+- **Remember.** Another hotkey searches everything as you type, typos and all. End with `?` and
+  it answers from your notes, citing each one it used. Read and edit notes in the app, with
+  related notes and backlinks beside them.
+- **Dream.** At night Dream compresses the notebook. It merges notes that say the same thing,
+  gathers scattered fragments (and AI sessions about the same work) into one note, archives what
+  nothing uses any more, fixes links that point nowhere, and zips old archives. It **proposes**,
+  you accept in the morning, and **every change can be undone**.
+- **Learn from AI sessions.** Your Claude Code and Codex sessions become notes: what you asked,
+  how it ended, the files changed, the commands run. Secrets are removed first. Sessions about
+  the same work are gathered into one thread overnight.
+- **Memory for your coding agents.** `fastmind mcp` lets Claude Code, Codex or Claude Desktop
+  search the notebook before they dig into something, and save what they find to your inbox.
+- **Home, every morning:** what Dream did and proposes, the inbox, recent notes, and two older
+  notes brought back so the good ones don't get lost.
 
 Your notes stay plain `.md` files with front matter, readable by any editor, Obsidian,
-[FastPad](https://github.com/coccor/FastPad) or an AI agent. FastMind keeps its own state in a
-`.fastmind/` folder inside the notebook: Dream's proposals, the undo journal and the archive. There's
-no database to lose, and no account.
+[FastPad](https://github.com/coccor/FastPad) or an agent. FastMind keeps its own state in
+`.fastmind/` inside the notebook (Dream's proposals, the undo journal, the archive). There's no
+database to lose and no account, and nothing leaves your computer unless you choose a cloud model.
 
-## Try it in two minutes
-
-```sh
-cargo run -p fastmind-desktop          # the app, in the tray
-```
-
-In the app open **Settings › Try a demo notebook**, then **Dream › Dream now**. The demo is a
-messy notebook with 22 notes: copies, fragments, finished and forgotten notes, an empty note, a
-mistyped link and an unused image. Dream proposes taking it to 10 notes. Preview any proposal,
-accept it, then undo it from the card or from **History**.
-
-Or use the terminal:
+## Try it
 
 ```sh
-cargo run -p fastmind-cli -- demo ~/FastMind-Demo
-cargo run -p fastmind-cli -- dream
-cargo run -p fastmind-cli -- dream apply all
-cargo run -p fastmind-cli -- ask "how do I stop kubernetes restart loops?"
+cargo run -p fastmind-desktop
 ```
 
-[docs/scenarios.md](docs/scenarios.md) walks through every scenario, step by step.
+The first run asks where your notes are. It finds Obsidian vaults and FastCapture notebooks,
+or makes `~/FastMind`. Choose **Try a demo notebook first** to see Dream work: a messy notebook
+with 22 notes that Dream proposes taking down to 10. [docs/scenarios.md](docs/scenarios.md)
+walks through every scenario.
 
 ## Dream: compression you can trust
 
 | Proposal | When | What happens |
 |---|---|---|
-| **Merge** | Most of one note's phrasing appears in another (55% by default) | The best-linked copy stays. Paragraphs only the others had are added under it. Their titles become `aliases`, links to them are pointed at the survivor, and the copies go to the archive. |
-| **Gather a topic** | Three or more short notes share their vocabulary (a shared tag counts in favour) | One `type: topic` note holds them all in date order, under a title and summary taken from the notes. The fragments go to the archive and links follow. |
-| **Archive** | Untouched, unlinked and unopened for 180 days, marked `done` for 30 days, or empty. Also files nothing links to. | Moved to `.fastmind/archive/`. Still searchable, ranked lower, and restored with one click. |
-| **Fix a link** | `[[Postgress vacuum]]` points nowhere and only one note is that close | The link is corrected. |
-| **Pack** | Archived notes older than 30 days, and undo records older than 30 days | Compressed into one zip in `.fastmind/archive/packs/`. Archived notes can still be restored from it. |
+| **Merge** | Most of one note's phrasing appears in another | The best-linked copy stays, with what only the others said added under it. Their titles become aliases, links follow, and the copies go to the archive. |
+| **Gather** | Three or more short notes share a subject, or AI sessions continue the same work | One note holds them in date order. The pieces go to the archive and links follow. |
+| **Archive** | Untouched, unlinked and unopened for 180 days, `done` for 30, empty, or an AI session unopened for 90. Also files nothing links to. | Moved to `.fastmind/archive/`: still searchable, ranked lower, and restored in one click. |
+| **Fix a link** | `[[Postgress vacuum]]` points nowhere and one note is that close | The link is corrected. |
+| **Pack** | Archived notes and undo records over 30 days old | Zipped into `.fastmind/archive/packs/`. Notes can still be restored from the pack. |
 
-The rules that make this safe:
+What keeps it safe:
 
-- **It proposes; it doesn't rewrite.** Only the kinds you allow are applied on their own. That is
-  packing, by default (Settings › Dream).
-- **Every change goes through a journal.** The files are copied before they change. Undo puts
-  them back, but it refuses if you've edited a file since, so it never loses your work.
-- **Some notes are never touched:** home notes (`type: topic`, `project`, `moc`, `index`), pinned
-  notes (`pin: true`) and anything changed in the last two days.
-- **Nothing is deleted.** Archiving moves a note; packing compresses it. Both can be reversed.
-- **It works offline.** Dream and Remember run on text statistics. A model is optional: a local
-  server (Ollama, LM Studio) or Claude, if you choose it. With a model, topic titles,
-  summaries and answers read better.
+- It proposes; you decide. Only the kinds you allow run on their own (packing, by default).
+  **Skip** means Dream won't propose that again, and **Keep forever** pins a note.
+- Every change goes through a journal. Undo puts the files back, but it refuses if you've
+  edited them since.
+- Some notes are never touched: home notes (`type: topic`, `project`, `moc`), pinned notes,
+  templates, records (daily notes, meetings, logs) and anything changed in the last two days.
+- Nothing is deleted, and it works offline. A model (a local server, or Claude) only writes
+  better titles, summaries and answers.
+
+It's tested against real-world shapes: templated meeting and daily notes are never mistaken for
+copies. On 5,000 notes Dream takes about 4 seconds and search about 20 ms.
 
 ## Keys
 
 | Key | |
 |---|---|
-| **Ctrl+Alt+Space** (anywhere) | Capture box. **Cmd+Option+Space** on macOS. |
+| **Ctrl+Alt+Space** (anywhere) | Capture. **Cmd+Option+Space** on macOS. |
 | **Ctrl+Alt+R** (anywhere) | Remember: search and ask |
 | **Ctrl+Enter** | Save a capture, or ask the question in the search box |
-| **Ctrl+K** / **Ctrl+N** in the app | Search / capture |
+| **↑ ↓ / Enter** | Move through results / read |
+| **Ctrl+E**, **Ctrl+S** | Edit the open note, save it |
+| Inbox: **Enter**, **F**, **K**, **A** | File in the suggestion, another folder, keep, archive |
+| **Ctrl+K** / **Ctrl+N** | Search / capture, inside the app |
 
-Both global keys can be changed in Settings. The tray menu has Capture, Remember, Dream now,
-Dream's proposals, Open notebook folder, Settings and Quit. Closing the window keeps FastMind in the tray.
+Hotkeys can be changed in Settings and apply at once. Closing the window keeps FastMind in the
+tray, where it dreams at night.
+
+## Coding agents
+
+Settings › **Connect your coding agents** shows the exact command for this computer. For
+example, for Claude Code:
+
+```sh
+claude mcp add --scope user fastmind -- fastmind mcp
+```
+
+Agents get `search_notes`, `read_note`, `ask_notebook` and `save_finding`. Their findings land
+in your inbox tagged `agent`, with secrets removed.
 
 ## The command line
 
-`fastmind` does everything the app does, for scripts and coding agents:
+`fastmind` does everything the app does:
 
 ```
-fastmind capture "lag spikes during ledger batch" --tag perf --attach ./ledger.log
-echo "from a pipe" | fastmind capture -
+fastmind setup ~/Notes                    # choose the notebook
+fastmind capture "lag spikes in the ledger batch" --tag perf --attach ./ledger.log
 fastmind search "#perf ledger"
 fastmind ask "why did the ledger batch lag?"
-fastmind dream | dream show | dream apply p3 | dream apply all --kinds archive,pack | dream undo p3
+fastmind dream | dream apply all | dream undo p3
 fastmind history | undo <entry> | archive | restore <id> | inbox | status
-fastmind serve            # the app's UI in a browser at http://127.0.0.1:7878 (localhost only)
+fastmind mcp                              # the notebook for coding agents (MCP over stdio)
+fastmind serve                            # the app's UI in a browser, on localhost only
 ```
-
-`--notebook DIR` uses another notebook for one command, and `--json` prints raw JSON.
 
 ## Build
 
@@ -109,19 +125,15 @@ cargo test --workspace
 cargo build --release -p fastmind-desktop -p fastmind-cli
 ```
 
-CI builds and tests on Windows, macOS and Linux, and runs the scenario walk-through on each.
-
 | Folder | |
 |---|---|
-| `crates/core` | Everything that matters: notebook, capture, search, answers, Dream, journal, archive. No UI and nothing OS-specific. |
-| `crates/cli` | `fastmind`, the terminal front end and `serve` |
-| `apps/desktop` | The tray app (Tauri 2): hotkeys, windows, the nightly run. Its UI lives in `apps/desktop/ui`. |
+| `crates/core` | Notebook, capture, search, answers, Dream, filing, AI sessions, journal, archive. No UI and nothing OS-specific. |
+| `crates/cli` | `fastmind`: the terminal, `serve` and `mcp` |
+| `apps/desktop` | The tray app (Tauri 2): hotkeys, windows, nightly runs. Its UI is in `apps/desktop/ui`. |
 
-## Settings
-
-Settings are kept in `settings.json` in your config folder (`%AppData%\coccor\FastMind\config`,
-`~/Library/Application Support/dev.coccor.FastMind`, `~/.config/fastmind`).
-`FASTMIND_CONFIG` points somewhere else. The notebook defaults to `~/FastMind`.
+Settings live in `settings.json` in your config folder (`%AppData%\coccor\FastMind\config`,
+`~/Library/Application Support/dev.coccor.FastMind`, `~/.config/fastmind`). `FASTMIND_CONFIG`
+points elsewhere.
 
 ## License
 

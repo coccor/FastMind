@@ -71,11 +71,36 @@ Applying a proposal recomputes it from the current files, so the proposals are i
 accepting one doesn't make another stale. If a file it needs is gone, the proposal is marked
 *out of date*.
 
+## Since the first version
+
+- **AI sessions** (`sessions.rs`). Claude Code transcripts are JSONL. User and assistant
+  lines carry `cwd`, `gitBranch`, `entrypoint` and `isSidechain`, and `ai-title` lines name the
+  session. Subagent files (in `subagents/`), `sdk-*` entrypoints and sessions in temporary
+  folders are skipped. Notes take the session's end time as their file time, so Dream judges
+  them by when the work happened. A note edited by hand is never overwritten when the session
+  grows.
+- **Threads.** AI sessions in one project whose titles match after a trailing copy number is
+  dropped ("Backlog creation 2"), or share most of their words (two or more), are gathered once
+  the newest is three days quiet.
+- **Records and templates.** Daily notes (named by the date alone, or in a daily or journal
+  folder), meetings and logs are never archived for being old, merged or gathered. Templates
+  are never touched.
+- **Skips are remembered** by signature (the proposal's kind and its sorted notes). A new copy
+  changes the signature, so Dream may ask again.
+- **Filing** (`filing.rs`). Suggestions add up the similarity of a note's 20 nearest notes per
+  folder, and weight home notes 1.5×. A Markdown link that points at a moved note is rewritten
+  relative to the note holding it.
+- **Speed.** Search keeps one cache of notes and documents, refreshed from the directory
+  listing's sizes and times: about 13 ms for 5,000 notes when nothing changed, and only changed
+  files are read. Dream compares only pairs that share one of their strongest words, and looks
+  for link fixes among names with the same first letter.
+- **MCP** (`crates/cli/src/mcp.rs`): newline-delimited JSON-RPC on stdio, protocol 2025-06-18,
+  with four tools.
+
 ## Not done yet
 
 - Installers (MSI/DMG/AppImage through `tauri build`) and signing; CI uploads raw binaries
-- Filing inbox notes into homes (FastCapture's review window); attachments in the capture box
 - Remind, Focus and Practice from the backlog; Remember by meaning (embeddings)
 - Idle detection for Dream (it runs in its time window; it doesn't wait for the machine to be idle)
-- FastCapture's model pipeline (link fetching, PDF extraction) isn't ported; capture saves your
-  text as written
+- FastCapture's model pipeline (PDF and Word extraction, a model writing the note) isn't
+  ported; capture saves your text as written, plus a link's title and description

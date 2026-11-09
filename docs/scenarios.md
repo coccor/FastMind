@@ -3,8 +3,8 @@
 Each scenario runs against the demo notebook. `crates/core/tests/scenarios.rs` checks all of them
 on every build, and CI walks through them with the CLI on Windows, macOS and Linux.
 
-Make the demo first. In the app use **Settings › Try a demo notebook** (it lands in
-`~/FastMind Demo`); in a terminal run:
+Make the demo first. On the first run choose **Try a demo notebook first**, or later use
+**Settings › Try a demo notebook** (it lands in `~/FastMind Demo`). In a terminal run:
 
 ```sh
 fastmind demo ~/FastMind-Demo
@@ -69,3 +69,47 @@ In **Settings › Model** choose **Local server** (with Ollama running: `ollama 
 **Claude** (with `ANTHROPIC_API_KEY` set). Dream now asks the model to title and summarize
 each topic note, and Remember writes its answers in prose, citing notes as [1], [2]. If the
 model can't be reached, both fall back to the offline way and say so.
+
+## 6. File the inbox in a few keystrokes
+
+1. Open **Inbox**. Each note shows where it probably belongs, from the notes it's most like:
+   "File in ▸ ideas/", with "Beside Docker build cache" as the reason. A topic note is offered
+   with ❖.
+2. Press **Enter** to file the first note there. The next note is selected. **F** files in
+   another folder (new folders are made), **K** keeps a note in the inbox, **A** archives it.
+3. Filing into a topic note moves the note beside it and adds `- [[the note]]` to its
+   `## Notes` list. **History** can undo either.
+
+## 7. Turn AI sessions into memory
+
+1. **Settings › Learn from AI sessions**: tick **Turn AI sessions into notes**, then press
+   **Import now**. FastMind reads Claude Code's transcripts (`~/.claude/projects`) and Codex's
+   (`~/.codex/sessions`) on this computer.
+2. Each finished session becomes a note in `AI sessions/<project>/`. It holds what you asked,
+   how it ended, the files changed and the commands run. API keys, tokens, private keys and
+   passwords are replaced by `<redacted>`. Subagents' side conversations, scripted runs and
+   sessions in temporary folders are left out.
+3. Search for something you solved with an agent last week: the session comes up, marked
+   **AI session**.
+4. Overnight, Dream gathers sessions that continued the same work ("Multi notebook tabs",
+   "Multi notebook tabs 2") into one thread note, and archives sessions nobody opened in 90 days.
+
+## 8. Give your coding agent the notebook
+
+1. **Settings › Connect your coding agents** shows the command. For Claude Code:
+   `claude mcp add --scope user fastmind -- <path>/fastmind mcp`.
+2. In a Claude Code session ask "search my notes for the ledger lag". It calls `search_notes`
+   and reads the note.
+3. When the agent finds something worth keeping, it calls `save_finding`. The finding lands in
+   your inbox tagged `agent`, with secrets removed.
+
+## 9. The first run
+
+On a computer where FastMind hasn't been set up, the app asks where your notes are. It offers:
+
+- a notebook FastMind used before
+- FastCapture's notebooks and Obsidian vaults it finds
+- a new `~/FastMind`, any folder you type or browse to, or the demo
+
+It also shows the two hotkeys and, if it finds Claude Code or Codex sessions, offers to turn them
+into notes. Nothing is written until you choose.
