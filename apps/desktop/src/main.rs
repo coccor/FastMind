@@ -42,6 +42,7 @@ async fn call(
             | "settings_set"
     );
     let from_capture_window = name == "capture";
+    let settings_changed = name == "settings_set";
     let result = tauri::async_runtime::spawn_blocking(move || core.call(&name, args))
         .await
         .map_err(|error| error.to_string())?
@@ -52,8 +53,28 @@ async fn call(
         if from_capture_window {
             update_tray(&app);
         }
+        if settings_changed {
+            apply_autostart(&app);
+        }
     }
     result
+}
+
+/// Starts FastMind with the computer (hidden, in the tray) when Settings say so.
+fn apply_autostart(app: &AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    let wanted = app.state::<Core>().0.settings().autostart;
+    let launcher = app.autolaunch();
+    let result = if wanted {
+        launcher.enable()
+    } else if launcher.is_enabled().unwrap_or(false) {
+        launcher.disable()
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result {
+        eprintln!("Couldn't change starting with the computer: {error}");
+    }
 }
 
 /// Opens a note in the system's editor for Markdown. Only files inside the notebook.

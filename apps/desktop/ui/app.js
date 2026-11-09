@@ -490,6 +490,7 @@ async function loadSettings() {
     form.inbox.value = settings.inbox;
     form.hotkey_capture.value = settings.hotkeys.capture;
     form.hotkey_remember.value = settings.hotkeys.remember;
+    form.autostart.checked = !!settings.autostart;
     const d = settings.dream;
     form.nightly.checked = d.nightly;
     form.window_start.value = d.window_start;
@@ -515,6 +516,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
   s.notebook = form.notebook.value.trim() || null;
   s.inbox = form.inbox.value.trim() || "inbox";
   s.hotkeys = { capture: form.hotkey_capture.value.trim(), remember: form.hotkey_remember.value.trim() };
+  s.autostart = form.autostart.checked;
   Object.assign(s.dream, {
     nightly: form.nightly.checked,
     window_start: form.window_start.value.trim(),
