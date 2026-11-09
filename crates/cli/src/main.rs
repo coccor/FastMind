@@ -32,6 +32,7 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
   archive                 Archived notes
   restore ID              Put an archived note back
 
+  setup DIR               Use DIR as the notebook (made if missing)
   demo [DIR]              Make a messy demo notebook and use it
   serve [--port N] [--ui DIR]
                           Serve the app's UI and API on localhost (for a browser)
@@ -304,6 +305,14 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
                 .ok_or_else(|| usage("restore needs an archive id"))?;
             let done = app.call("archive_restore", json!({"id": id}))?;
             out(&done, &|v| println!("Restored to {}", s(&v["path"])));
+        }
+        "setup" => {
+            let folder = rest
+                .first()
+                .ok_or_else(|| usage("setup needs the folder for your notes"))?;
+            let folder = std::path::absolute(folder).map_err(|e| Failure::Failed(e.to_string()))?;
+            app.call("setup", json!({"notebook": folder}))?;
+            println!("FastMind now uses {}", folder.display());
         }
         "demo" => {
             let done = app.call("demo_create", json!({"path": rest.first()}))?;

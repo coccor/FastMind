@@ -91,6 +91,27 @@ fn open_path(core: tauri::State<'_, Core>, path: String) -> Result<(), String> {
     opener::open(&path).map_err(|e| e.to_string())
 }
 
+/// A folder picker for choosing the notebook.
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (send, receive) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("Choose the folder for your notes")
+        .pick_folder(move |folder| {
+            let _ = send.send(
+                folder
+                    .and_then(|f| f.into_path().ok())
+                    .map(|p| p.to_string_lossy().into_owned()),
+            );
+        });
+    tauri::async_runtime::spawn_blocking(move || receive.recv().ok().flatten())
+        .await
+        .ok()
+        .flatten()
+}
+
 #[tauri::command]
 fn hide_capture(app: AppHandle) {
     if let Some(window) = app.get_webview_window("capture") {
@@ -264,6 +285,7 @@ fn main() {
     let core = Arc::new(App::new(settings.clone()));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app, None)
         }))
@@ -286,7 +308,12 @@ fn main() {
                 .build(),
         )
         .manage(Core(core))
-        .invoke_handler(tauri::generate_handler![call, open_path, hide_capture])
+        .invoke_handler(tauri::generate_handler![
+            call,
+            open_path,
+            hide_capture,
+            pick_folder
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
 

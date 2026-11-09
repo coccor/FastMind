@@ -58,8 +58,15 @@ impl App {
         self.settings.lock().expect("settings lock").clone()
     }
 
+    /// The chosen notebook. Before one is chosen there's none: FastMind never makes a folder
+    /// the user didn't pick.
     pub fn notebook(&self) -> Result<Notebook> {
-        Notebook::open(self.settings().notebook_or_default())
+        match self.settings().notebook {
+            Some(path) => Notebook::open(path),
+            None => Err(Error::msg(
+                "no notebook chosen yet: open FastMind to choose one, or run `fastmind setup <folder>`",
+            )),
+        }
     }
 
     fn model(&self) -> Option<Model> {
@@ -84,7 +91,10 @@ impl App {
 
     pub fn call(&self, name: &str, args: Value) -> Result<Value> {
         // These don't need the notebook, so they never create its folder.
-        if matches!(name, "settings_get" | "settings_set" | "demo_create") {
+        if matches!(
+            name,
+            "settings_get" | "settings_set" | "demo_create" | "first_run" | "setup"
+        ) {
             return self.call_without_notebook(name, args);
         }
         let nb = self.notebook()?;
@@ -407,6 +417,27 @@ impl App {
                 settings.notebook = Some(path.clone());
                 self.replace_settings(settings)?;
                 json!({ "path": path, "notes": report })
+            }
+            "first_run" => {
+                let settings = self.settings();
+                let transcripts =
+                    crate::sessions::discover(&crate::sessions::AiSettings::default());
+                json!({
+                    "needs_setup": settings.notebook.is_none(),
+                    "candidates": crate::setup::candidates(),
+                    "ai_sessions": transcripts.len(),
+                    "hotkeys": settings.hotkeys,
+                })
+            }
+            "setup" => {
+                let notebook: PathBuf = arg(&args, "notebook")?;
+                let ai: bool = arg(&args, "ai").unwrap_or(false);
+                std::fs::create_dir_all(&notebook)?;
+                let mut settings = self.settings();
+                settings.notebook = Some(notebook);
+                settings.ai.enabled = ai;
+                self.replace_settings(settings)?;
+                json!({ "ok": true })
             }
             other => return Err(Error::msg(format!("unknown command: {other}"))),
         })

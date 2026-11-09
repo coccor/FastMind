@@ -981,5 +981,76 @@ function startCaptureOnly() {
   if (tauri) tauri.event.listen("capture-shown", () => setTimeout(() => area.focus(), 30));
 }
 
-if (new URLSearchParams(location.search).get("mode") === "capture") startCaptureOnly();
-else startMain();
+// First run: choose where the notes live before anything touches the disk.
+async function startWelcome(first) {
+  $("#welcome").hidden = false;
+  const options = $("#welcome-options");
+  let chosen = null;
+  const pick = (path) => {
+    chosen = path;
+    options.querySelectorAll(".option").forEach((o) => o.classList.toggle("chosen", o.dataset.path === path));
+    $("#welcome-path").value = path;
+  };
+  options.innerHTML = first.candidates
+    .map((c) => `<button type="button" class="option" data-path="${esc(c.path)}">
+        <span class="option-kind">${c.kind === "obsidian" ? "Obsidian vault" : c.kind === "fastcapture" ? "FastCapture notebook" : c.kind === "fastmind" ? "Your FastMind notebook" : c.notes ? "Notebook" : "New notebook"}</span>
+        <span class="option-path">${esc(c.path)}</span>
+        <span class="muted small">${c.notes ? c.notes + " notes" : c.kind === "fastmind" ? "used before" : "empty, ready for your first note"}</span></button>`)
+    .join("");
+  options.addEventListener("click", (event) => {
+    const option = event.target.closest(".option");
+    if (option) pick(option.dataset.path);
+  });
+  const best = first.candidates.find((c) => c.kind === "fastmind") || first.candidates.find((c) => c.notes > 0) || first.candidates[first.candidates.length - 1];
+  if (best) pick(best.path);
+  $("#welcome-path").addEventListener("input", (event) => { chosen = event.target.value.trim(); options.querySelectorAll(".option").forEach((o) => o.classList.remove("chosen")); });
+  if (tauri) {
+    $("#welcome-browse").hidden = false;
+    $("#welcome-browse").addEventListener("click", async () => {
+      const folder = await tauri.core.invoke("pick_folder").catch(() => null);
+      if (folder) pick(folder);
+    });
+  }
+  if (first.ai_sessions) {
+    $("#welcome-ai-row").hidden = false;
+    $("#welcome-ai-text").textContent = `Turn my ${first.ai_sessions} Claude Code / Codex sessions into notes (secrets removed, read on this computer only)`;
+  }
+  const key = (k) => k.replace("CommandOrControl", navigator.platform.startsWith("Mac") ? "Cmd" : "Ctrl").replace(/\+/g, " + ");
+  $("#welcome-keys").innerHTML = `From anywhere: <kbd>${esc(key(first.hotkeys.capture))}</kbd> captures, <kbd>${esc(key(first.hotkeys.remember))}</kbd> searches your notes.`;
+  const finish = async (path) => {
+    try {
+      await call("setup", { notebook: path, ai: !$("#welcome-ai-row").hidden && $("#welcome-ai").checked });
+      $("#welcome").hidden = true;
+      startMain();
+      if (!$("#welcome-ai-row").hidden && $("#welcome-ai").checked) call("ai_import").then(() => refreshStatus()).catch(() => {});
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  };
+  $("#welcome-start").addEventListener("click", () => {
+    const path = ($("#welcome-path").value || chosen || "").trim();
+    if (!path) { toast("Choose a folder for your notes", true); return; }
+    finish(path);
+  });
+  $("#welcome-demo").addEventListener("click", async () => {
+    try {
+      await call("demo_create", {});
+      $("#welcome").hidden = true;
+      startMain();
+      toast("This is a messy demo notebook. Open Dream and press Dream now. Switch to your own notes in Settings.");
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  });
+}
+
+async function start() {
+  if (new URLSearchParams(location.search).get("mode") === "capture") { startCaptureOnly(); return; }
+  try {
+    const first = await call("first_run");
+    if (first.needs_setup) { startWelcome(first); return; }
+  } catch {}
+  startMain();
+}
+
+start();
