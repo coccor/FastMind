@@ -140,47 +140,92 @@ impl<'a> Transaction<'a> {
         self.entry.changes.is_empty()
     }
 
+    /// Records the change. When the record can't be written, the files are put back instead:
+    /// a change FastMind can't undo is a change it doesn't make.
     pub fn commit(mut self) -> Result<Entry> {
-        self.done = true;
-        let manifest = serde_json::to_vec_pretty(&self.entry)?;
-        fsx::write_atomic(&self.dir.join("manifest.json"), &manifest)?;
-        Ok(self.entry.clone())
+        let written = serde_json::to_vec_pretty(&self.entry)
+            .map_err(Error::from)
+            .and_then(|manifest| fsx::write_atomic(&self.dir.join("manifest.json"), &manifest));
+        match written {
+            Ok(()) => {
+                self.done = true;
+                Ok(self.entry.clone())
+            }
+            Err(error) => {
+                self.rollback();
+                Err(error)
+            }
+        }
     }
 
     /// Puts back everything changed so far and forgets the transaction.
     pub fn abort(mut self) {
+        self.rollback();
+    }
+
+    /// Puts every file back. The saved copies are deleted only when all of them went back; if
+    /// any couldn't be (a file held open by another program), the record stays, so nothing is
+    /// lost and the change can still be undone from History.
+    fn rollback(&mut self) {
         self.done = true;
-        let _ = restore(self.nb, &self.dir, &self.entry);
-        let _ = fs::remove_dir_all(&self.dir);
+        match restore(self.nb, &self.dir, &self.entry) {
+            Ok(()) => {
+                let _ = fs::remove_dir_all(&self.dir);
+            }
+            Err(_) => {
+                self.entry.label = format!(
+                    "{} (interrupted; undo to finish putting it back)",
+                    self.entry.label
+                );
+                if let Ok(manifest) = serde_json::to_vec_pretty(&self.entry) {
+                    let _ = fsx::write_atomic(&self.dir.join("manifest.json"), &manifest);
+                }
+            }
+        }
     }
 }
 
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
         if !self.done {
-            let _ = restore(self.nb, &self.dir, &self.entry);
-            let _ = fs::remove_dir_all(&self.dir);
+            self.rollback();
         }
     }
 }
 
+/// Puts each changed file back as it was. Keeps going past a file it can't restore, and says
+/// which ones failed at the end.
 fn restore(nb: &Notebook, dir: &std::path::Path, entry: &Entry) -> Result<()> {
+    let mut failed = Vec::new();
     for change in entry.changes.iter().rev() {
-        let path = nb.path(&change.path)?;
-        match &change.before {
-            Some(copy) => {
-                let bytes = fs::read(dir.join("files").join(copy))?;
-                fsx::write_atomic(&path, &bytes)?;
-            }
-            None => {
-                if path.exists() {
-                    fs::remove_file(&path)?;
-                    remove_empty_parents(&nb.root, &path);
+        let result = (|| -> Result<()> {
+            let path = nb.path(&change.path)?;
+            match &change.before {
+                Some(copy) => {
+                    let bytes = fs::read(dir.join("files").join(copy))?;
+                    fsx::write_atomic(&path, &bytes)?;
+                }
+                None => {
+                    if path.exists() {
+                        fs::remove_file(&path)?;
+                        remove_empty_parents(&nb.root, &path);
+                    }
                 }
             }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            failed.push(format!("{} ({error})", change.path));
         }
     }
-    Ok(())
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::msg(format!(
+            "couldn't put back: {}",
+            failed.join(", ")
+        )))
+    }
 }
 
 fn remove_empty_parents(root: &std::path::Path, path: &std::path::Path) {
@@ -214,8 +259,10 @@ pub fn history(nb: &Notebook) -> Vec<Entry> {
     entries
 }
 
-/// Which files of `entry` changed since FastMind wrote them.
+/// Which files of `entry` changed since FastMind wrote them. A file already back as it was
+/// before (a partly finished undo) isn't a conflict.
 pub fn conflicts(nb: &Notebook, entry: &Entry) -> Vec<String> {
+    let dir = journal_dir(nb).join(&entry.id);
     entry
         .changes
         .iter()
@@ -223,6 +270,16 @@ pub fn conflicts(nb: &Notebook, entry: &Entry) -> Vec<String> {
             let Ok(path) = nb.path(&change.path) else {
                 return true;
             };
+            let as_before = match &change.before {
+                Some(copy) => fs::read(dir.join("files").join(copy))
+                    .ok()
+                    .zip(fs::read(&path).ok())
+                    .is_some_and(|(before, now)| before == now),
+                None => !path.exists(),
+            };
+            if as_before {
+                return false;
+            }
             match change.after {
                 Some(hash) => hash_file(&path).map_or(true, |now| now != hash),
                 None => path.exists(),
@@ -248,7 +305,13 @@ pub fn undo(nb: &Notebook, id: &str) -> Result<Entry> {
             changed.join(", ")
         )));
     }
-    restore(nb, &dir, &entry)?;
+    // If a file can't be put back now (held open elsewhere), the others still are, and the
+    // entry stays undoable: once the file is free, undo again finishes the job.
+    if let Err(error) = restore(nb, &dir, &entry) {
+        return Err(Error::msg(format!(
+            "partly undone, {error}; close the program holding it and undo again"
+        )));
+    }
     entry.undone = true;
     fsx::write_atomic(
         &dir.join("manifest.json"),
@@ -300,6 +363,23 @@ mod tests {
             fs::read_to_string(nb.root.join("a.md")).unwrap(),
             "edited by hand"
         );
+    }
+
+    #[test]
+    fn an_undo_stopped_part_way_can_be_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let nb = Notebook::open(dir.path()).unwrap();
+        fs::write(nb.root.join("a.md"), "one").unwrap();
+        fs::write(nb.root.join("b.md"), "two").unwrap();
+        let mut tx = Transaction::begin(&nb, "test", "test").unwrap();
+        tx.write("a.md", b"ONE").unwrap();
+        tx.write("b.md", b"TWO").unwrap();
+        let entry = tx.commit().unwrap();
+        // As if the first undo put a.md back and then couldn't write b.md.
+        fs::write(nb.root.join("a.md"), "one").unwrap();
+        assert!(conflicts(&nb, &entry).is_empty());
+        undo(&nb, &entry.id).unwrap();
+        assert_eq!(fs::read_to_string(nb.root.join("b.md")).unwrap(), "two");
     }
 
     #[test]

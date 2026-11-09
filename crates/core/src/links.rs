@@ -70,13 +70,18 @@ fn scan_line<'a>(line: &'a str, offset: usize, visit: &mut impl FnMut(Link<'a>))
             && line[at..].starts_with("](")
             && let Some(close) = line[at + 2..].find(')')
         {
-            let raw = &line[at + 2..at + 2 + close];
-            let raw = raw.split_whitespace().next().unwrap_or("");
+            let inside = &line[at + 2..at + 2 + close];
+            // `( Old.md "title")`: the path starts after any spaces and ends at the next one.
+            let lead = inside.len() - inside.trim_start().len();
+            let raw = inside[lead..]
+                .split(char::is_whitespace)
+                .next()
+                .unwrap_or("");
             let path = raw.split('#').next().unwrap_or("");
             if path.to_ascii_lowercase().ends_with(".md") && !path.contains("://") {
                 visit(Link {
-                    start: offset + at + 2,
-                    end: offset + at + 2 + path.len(),
+                    start: offset + at + 2 + lead,
+                    end: offset + at + 2 + lead + path.len(),
                     target: path,
                     has_display: true,
                     wiki: false,
@@ -174,6 +179,45 @@ pub fn retarget_note(
         true,
         &encode(&relative_path(from_path, new_path)),
     )
+}
+
+/// Points only Markdown links that `points_to` accepts at `new_path`, relative to `from_path`.
+/// Wikilinks are left alone.
+pub fn retarget_markdown(
+    body: &str,
+    points_to: impl Fn(&str) -> bool,
+    new_path: &str,
+    from_path: &str,
+) -> String {
+    let target = encode(&relative_path(from_path, new_path));
+    let mut edits: Vec<(usize, usize)> = Vec::new();
+    for_each_link(body, |link| {
+        if !link.wiki && points_to(link.target) {
+            edits.push((link.start, link.end));
+        }
+    });
+    let mut out = body.to_owned();
+    for (start, end) in edits.into_iter().rev() {
+        out.replace_range(start..end, &target);
+    }
+    out
+}
+
+/// The notebook path a relative Markdown link `written` in the note at `from` points to.
+pub fn relative_target_path(from: &str, written: &str) -> String {
+    let decoded = decode(written);
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for part in decoded.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    parts.join("/")
 }
 
 /// `to` as a path relative to the folder of `from` (both notebook-relative, `/`-separated).
@@ -295,6 +339,21 @@ mod tests {
             Some("sub/Gamma One.md")
         );
         assert_eq!(resolver.resolve("missing"), None);
+    }
+
+    #[test]
+    fn spaces_inside_markdown_links_are_kept() {
+        let body = "[x]( Old.md) [y](  Old.md \"t\") [z](   Old.md) é";
+        let out = retarget(body, |t| t == "Old.md", "Brand New");
+        assert_eq!(
+            out,
+            "[x]( Brand%20New.md) [y](  Brand%20New.md \"t\") [z](   Brand%20New.md) é"
+        );
+        let wide = "[α](    Old.md) ünïcödé ✓";
+        assert_eq!(
+            retarget(wide, |t| t == "Old.md", "N"),
+            "[α](    N.md) ünïcödé ✓"
+        );
     }
 
     #[test]

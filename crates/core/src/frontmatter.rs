@@ -173,7 +173,10 @@ pub fn remove(text: &str, key: &str) -> String {
     let mut skipping = false;
     for line in head.lines() {
         if skipping {
-            if line.starts_with([' ', '\t']) || line.trim_start().starts_with("- ") {
+            if line.starts_with([' ', '\t'])
+                || line.trim_start().starts_with("- ")
+                || line.trim() == "-"
+            {
                 continue;
             }
             skipping = false;
@@ -437,6 +440,12 @@ mod tests {
         let front = parse(&changed);
         assert!(front.get("aliases").is_none());
         assert_eq!(front.text("status"), Some("inbox"));
+    }
+
+    #[test]
+    fn remove_takes_bare_dashes_with_the_list() {
+        let text = "---\ntags:\n- a\n-\ntitle: x\n---\nbody";
+        assert_eq!(remove(text, "tags"), "---\ntitle: x\n---\nbody");
     }
 
     #[test]

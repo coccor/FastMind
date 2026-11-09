@@ -16,7 +16,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".into());
-    let temp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    // Unique per write, not only per process: two writes to one file at once (a background
+    // update and an edit) must not share a temp file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
     {
         let mut file = fs::File::create(&temp)?;
         file.write_all(bytes)?;

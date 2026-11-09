@@ -44,6 +44,27 @@ enum Source<'a> {
 pub struct Saved {
     pub path: String,
     pub title: String,
+    /// Hash of the note as saved: a later background update only applies to it unchanged.
+    #[serde(default)]
+    pub written: u64,
+}
+
+/// A free file name in `dir`, claimed by creating it empty: another capture at the same
+/// moment can't take the same name.
+fn reserve(dir: &std::path::Path, stem: &str, ext: &str) -> Result<String> {
+    for _ in 0..50 {
+        let name = fsx::free_name(stem, ext, |name| dir.join(name).exists());
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(&name))
+        {
+            Ok(_) => return Ok(name),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(Error::msg("couldn't find a free file name"))
 }
 
 pub const MAX_TEXT: usize = 1_000_000;
@@ -119,9 +140,7 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
         .unwrap_or_else(|| inbox.to_owned());
     let dir = nb.path(&folder)?;
     fs::create_dir_all(&dir)?;
-    let name = fsx::free_name(&fsx::safe_stem(&title), "md", |name| {
-        dir.join(name).exists()
-    });
+    let name = reserve(&dir, &fsx::safe_stem(&title), "md")?;
     let rel = if folder.is_empty() {
         name.clone()
     } else {
@@ -177,18 +196,27 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
                 Some(at) => (original[..at].to_owned(), original[at + 1..].to_owned()),
                 None => (original.clone(), String::new()),
             };
-            let free = fsx::free_name(&fsx::safe_stem(&stem), &ext, |name| {
-                attach_dir.join(name).exists()
-            });
+            let free = match reserve(&attach_dir, &fsx::safe_stem(&stem), &ext) {
+                Ok(free) => free,
+                Err(error) => {
+                    for path in written {
+                        let _ = fs::remove_file(path);
+                    }
+                    let _ = fs::remove_file(dir.join(&name));
+                    return Err(error);
+                }
+            };
             let target = attach_dir.join(&free);
             let result = match source {
                 Source::Path(path) => fs::copy(path, &target).map(|_| ()),
                 Source::Bytes(bytes) => fs::write(&target, bytes),
             };
             if let Err(error) = result {
+                let _ = fs::remove_file(&target);
                 for path in written {
                     let _ = fs::remove_file(path);
                 }
+                let _ = fs::remove_file(dir.join(&name));
                 return Err(error.into());
             }
             written.push(target);
@@ -210,9 +238,14 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
         for path in written {
             let _ = fs::remove_file(path);
         }
+        let _ = fs::remove_file(dir.join(&name));
         return Err(error);
     }
-    Ok(Saved { path: rel, title })
+    Ok(Saved {
+        path: rel,
+        title,
+        written: text::fnv(note.as_bytes()),
+    })
 }
 
 /// What a web page says it is: its title and description, from `<title>`, Open Graph and
@@ -294,7 +327,8 @@ pub fn enrich_link(nb: &Notebook, saved: &Saved, url: &str) -> Result<bool> {
     let path = nb.path(&saved.path)?;
     let text = fs::read_to_string(&path)?;
     let heading = format!("# {}\n", saved.title);
-    if !text.contains(&heading) {
+    // Only the note exactly as it was saved: once the user has touched it, it's theirs.
+    if text::fnv(text.as_bytes()) != saved.written || !text.contains(&heading) {
         return Ok(false);
     }
     let title = text::excerpt(&page_title, 120);
@@ -303,6 +337,10 @@ pub fn enrich_link(nb: &Notebook, saved: &Saved, url: &str) -> Result<bool> {
         replacement.push_str(&format!("\n> {}\n", text::excerpt(&description, 400)));
     }
     let updated = text.replacen(&heading, &replacement, 1);
+    // Checked again right before writing: the page fetch took seconds.
+    if fs::read(&path).map(|now| text::fnv(&now)).ok() != Some(saved.written) {
+        return Ok(false);
+    }
     fsx::write_atomic(&path, updated.as_bytes())?;
     Ok(true)
 }

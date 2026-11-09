@@ -823,6 +823,18 @@ pub fn import(
             }
         };
         let path = nb.path(&rel)?;
+        // The model may have taken a while: the note must still be as FastMind left it (or,
+        // for a new note, still not exist), or it's left alone.
+        let untouched = match previous {
+            Some(previous) => {
+                fs::read(&path).map(|now| text::fnv(&now)).ok() == Some(previous.written)
+            }
+            None => !path.exists(),
+        };
+        if !untouched {
+            report.skipped += 1;
+            continue;
+        }
         fsx::write_atomic(&path, text.as_bytes())?;
         // The note is as old as the session, so Dream judges it by when the work happened.
         if let (Some(ended), Ok(file)) = (

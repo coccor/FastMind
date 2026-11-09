@@ -349,6 +349,8 @@ impl App {
             }
             "dream_latest" => json!(dream::latest(&nb)),
             "dream_apply" => {
+                // One Dream change at a time: a double click can't apply a proposal twice.
+                let _one_at_a_time = self.dreaming.lock().expect("dream lock");
                 let id: String = arg(&args, "id")?;
                 let proposal = dream::apply(&nb, &id, now)?;
                 self.invalidate();
@@ -359,6 +361,7 @@ impl App {
                 json!(dream::reject(&nb, &id)?)
             }
             "dream_apply_all" => {
+                let _one_at_a_time = self.dreaming.lock().expect("dream lock");
                 let names: Vec<String> = arg(&args, "kinds").unwrap_or_default();
                 let kinds: Vec<Kind> = names.iter().filter_map(|name| Kind::parse(name)).collect();
                 let done = dream::apply_all(&nb, &kinds, now)?;
@@ -366,6 +369,8 @@ impl App {
                 json!(done)
             }
             "dream_undo" => {
+                // One Dream change at a time: a double click can't apply a proposal twice.
+                let _one_at_a_time = self.dreaming.lock().expect("dream lock");
                 let id: String = arg(&args, "id")?;
                 let proposal = dream::undo(&nb, &id)?;
                 self.invalidate();

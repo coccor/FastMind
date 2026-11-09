@@ -141,10 +141,18 @@ pub fn file(nb: &Notebook, path: &str, folder: Option<&str>, home: Option<&str>)
     let new_stem = free.trim_end_matches(".md").to_owned();
 
     let mut text = frontmatter::remove(&note.text, "status");
-    if frontmatter::parse(&text).entries.is_empty() && frontmatter::parse(&text).present {
-        // Nothing left in the block: drop it rather than leave an empty one.
-        let body = frontmatter::body(&text).to_owned();
-        text = body;
+    let front = frontmatter::parse(&text);
+    if front.present {
+        // Nothing at all left between the dashes: drop the empty block. Lines FastMind can't
+        // read (comments, unusual keys) count as something.
+        let inner = &text[..front.body_start];
+        let blank = inner
+            .lines()
+            .filter(|l| l.trim() != "---" && l.trim() != "...")
+            .all(|l| l.trim().is_empty());
+        if blank {
+            text = frontmatter::body(&text).to_owned();
+        }
     }
     let label = home_note
         .as_ref()
@@ -163,13 +171,33 @@ pub fn file(nb: &Notebook, path: &str, folder: Option<&str>, home: Option<&str>)
         "inbox",
     )?;
     if target != path {
+        // The note's own Markdown links are relative to its folder: point them from the new one.
+        let resolver = Resolver::new(&notes);
+        let front_end = frontmatter::parse(&text).body_start;
+        let (head, mut body) = (text[..front_end].to_owned(), text[front_end..].to_owned());
+        let md_targets: Vec<String> = links::targets(&body)
+            .into_iter()
+            .filter(|t| t.to_ascii_lowercase().ends_with(".md"))
+            .collect();
+        for written in md_targets {
+            let from_old = links::relative_target_path(path, &written);
+            let resolved = resolver
+                .resolve(&from_old)
+                .or_else(|| resolver.resolve(&written));
+            if let Some(to) = resolved {
+                let to = if to == path { target.as_str() } else { to };
+                body = links::retarget_markdown(&body, |t| t == written, to, &target);
+            }
+        }
+        text = format!("{head}{body}");
         tx.write(&target, text.as_bytes())?;
         tx.remove(path)?;
     } else {
         tx.write(path, text.as_bytes())?;
     }
-    // Links that named the note by a file name it no longer has follow it.
-    if new_stem != note.stem() {
+    // Links follow the note: by name when its file name changed, and Markdown links (which
+    // name its folder too) whenever it moved.
+    if target != path {
         let resolver = Resolver::new(&notes);
         for other in notes.iter().filter(|n| n.path != path) {
             let body = links::retarget_note(
@@ -296,6 +324,29 @@ mod tests {
         assert_eq!(
             folders(&nb.notes()),
             vec!["home", "ideas", "work", "work/db"]
+        );
+    }
+
+    #[test]
+    fn a_moved_note_keeps_its_own_links_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let nb = Notebook::open(dir.path()).unwrap();
+        fs::create_dir_all(nb.root.join("inbox")).unwrap();
+        fs::create_dir_all(nb.root.join("work/db")).unwrap();
+        fs::write(nb.root.join("work/Plan.md"), "# Plan\n").unwrap();
+        fs::write(nb.root.join("inbox/Idea.md"), "---\nstatus: inbox\n# my comment\n---\n# Idea\n\nSee [the plan](../work/Plan.md) and [[Plan]].\n").unwrap();
+        fs::write(nb.root.join("Index.md"), "[idea](inbox/Idea.md)\n").unwrap();
+        let filed = file(&nb, "inbox/Idea.md", Some("work/db"), None).unwrap();
+        let moved = fs::read_to_string(nb.root.join(&filed)).unwrap();
+        assert!(moved.contains("[the plan](../Plan.md)"), "{moved}");
+        assert!(moved.contains("[[Plan]]"));
+        assert!(
+            moved.starts_with("---\n# my comment\n---\n"),
+            "front matter it can't read stays: {moved}"
+        );
+        assert_eq!(
+            fs::read_to_string(nb.root.join("Index.md")).unwrap(),
+            "[idea](work/db/Idea.md)\n"
         );
     }
 
