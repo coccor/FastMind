@@ -23,6 +23,7 @@
   <div id="app" class="app" hidden>
     <nav class="sidebar">
       <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span>FastMind</span></div>
+      <button class="nav" data-view="home"><span class="ico">⌂</span>Home</button>
       <button class="nav" data-view="remember"><span class="ico">⌕</span>Remember</button>
       <button class="nav" data-view="inbox"><span class="ico">✎</span>Inbox <span class="badge" id="badge-inbox"></span></button>
       <button class="nav" data-view="dream"><span class="ico">☾</span>Dream <span class="badge" id="badge-dream"></span></button>
@@ -36,6 +37,21 @@
     </nav>
 
     <main class="main">
+      <!-- Home -->
+      <section class="view" id="view-home" hidden>
+        <header class="view-head"><h1 id="home-greeting">Good morning</h1><p class="muted" id="home-line"></p></header>
+        <form id="home-capture" class="home-capture">
+          <textarea id="home-capture-text" placeholder="What's on your mind? Ctrl+Enter saves it to the inbox. #tags work."></textarea>
+          <div class="row gap"><button class="primary" type="submit">Save</button><span class="muted small">Or press the capture key from anywhere.</span></div>
+        </form>
+        <div class="home-grid">
+          <article class="card home-card" id="home-dream"></article>
+          <article class="card home-card" id="home-inbox"></article>
+          <article class="card home-card" id="home-resurfaced"></article>
+          <article class="card home-card" id="home-recent"></article>
+        </div>
+      </section>
+
       <!-- Remember -->
       <section class="view" id="view-remember">
         <header class="view-head">

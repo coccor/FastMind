@@ -127,6 +127,7 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "home" => self.home(&nb, now),
             "suggest_homes" => {
                 let path: String = arg(&args, "path")?;
                 let settings = self.settings();
@@ -399,6 +400,83 @@ impl App {
             })),
             "model": settings.model.label(),
             "hotkeys": settings.hotkeys,
+        })
+    }
+
+    /// The morning page: what Dream did and proposes, what's waiting, what's recent, and two
+    /// older notes brought back so they aren't forgotten.
+    fn home(&self, nb: &Notebook, now: chrono::DateTime<Local>) -> Value {
+        let notes = nb.notes();
+        let latest = dream::latest(nb);
+        let dream = latest.as_ref().map(|report| {
+            let applied: Vec<&dream::Proposal> =
+                report.proposals.iter().filter(|p| p.status == dream::Status::Applied).collect();
+            json!({
+                "ran_at": report.ran_at,
+                "summary": report.summary,
+                "pending": report.pending().count(),
+                "applied": applied.len(),
+                "before": report.before.notes,
+                "after": report.before.notes.saturating_sub(report.proposals.iter().filter(|p| p.status != dream::Status::Rejected).map(|p| p.notes_removed).sum::<usize>()),
+                "kinds": report.pending().fold(std::collections::BTreeMap::<String, usize>::new(), |mut acc, p| {
+                    *acc.entry(format!("{:?}", p.kind).to_lowercase()).or_default() += 1;
+                    acc
+                }),
+            })
+        });
+        let inbox = self.inbox(nb);
+        let mut recent: Vec<&crate::Note> =
+            notes.iter().filter(|n| n.status() != "inbox").collect();
+        recent.sort_by_key(|n| std::cmp::Reverse(n.touched));
+        let card = |n: &crate::Note| {
+            json!({
+                "path": n.path, "title": n.title, "kind": n.note_type(), "touched": n.touched,
+                "snippet": text::excerpt(&n.body().replace(&format!("# {}", n.title), ""), 160),
+            })
+        };
+        // Brought back: notes over a month old with something in them, not records or homes,
+        // picked by the date so the choice holds all day and changes tomorrow.
+        let usage = Usage::load(nb);
+        let mut old: Vec<&crate::Note> = notes
+            .iter()
+            .filter(|n| (now - n.touched).num_days() >= 30)
+            .filter(|n| n.word_count() >= 25 && !n.is_record() && !n.is_home() && !n.is_template())
+            .filter(|n| {
+                usage
+                    .last_opened(&n.path)
+                    .is_none_or(|at| (now - at).num_days() >= 30)
+            })
+            .collect();
+        old.sort_by_key(|n| n.path.clone());
+        let day = now.date_naive().to_string();
+        let mut resurfaced: Vec<Value> = Vec::new();
+        if !old.is_empty() {
+            let seed = text::fnv(day.as_bytes()) as usize;
+            for k in 0..old.len().min(2) {
+                let note = old[(seed + k * 7919) % old.len()];
+                if !resurfaced.iter().any(|r| r["path"] == json!(note.path)) {
+                    let mut value = card(note);
+                    value["age_days"] = json!((now - note.touched).num_days());
+                    resurfaced.push(value);
+                }
+            }
+        }
+        let ai_week = notes
+            .iter()
+            .filter(|n| {
+                n.note_type() == "ai-session"
+                    && (now - n.created.unwrap_or(n.touched)).num_days() < 7
+            })
+            .count();
+        json!({
+            "notes": notes.len(),
+            "dream": dream,
+            "inbox_count": inbox.len(),
+            "inbox": inbox.into_iter().take(3).collect::<Vec<_>>(),
+            "recent": recent.iter().take(6).map(|n| card(n)).collect::<Vec<_>>(),
+            "resurfaced": resurfaced,
+            "ai_week": ai_week,
+            "ai_enabled": self.settings().ai.enabled,
         })
     }
 

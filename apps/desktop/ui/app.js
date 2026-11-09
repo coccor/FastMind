@@ -130,14 +130,14 @@ function renderMarkdown(text) {
 }
 
 // ---------- navigation ----------
-const views = ["remember", "inbox", "dream", "archive", "history", "settings"];
-let current = "remember";
+const views = ["home", "remember", "inbox", "dream", "archive", "history", "settings"];
+let current = "home";
 
 function show(view) {
   current = view;
   for (const name of views) $("#view-" + name).hidden = name !== view;
   document.querySelectorAll(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-  ({ remember: loadRemember, inbox: loadInbox, dream: loadDream, archive: loadArchive, history: loadHistory, settings: loadSettings })[view]();
+  ({ home: loadHome, remember: loadRemember, inbox: loadInbox, dream: loadDream, archive: loadArchive, history: loadHistory, settings: loadSettings })[view]();
   try { localStorage.setItem("fastmind.view", view); } catch {}
 }
 
@@ -151,6 +151,75 @@ async function refreshStatus() {
     $("#notebook-line").textContent = String(error.message || error);
   }
 }
+
+// ---------- Home ----------
+async function loadHome() {
+  const hour = new Date().getHours();
+  $("#home-greeting").textContent = hour < 5 ? "Still up?" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  let home;
+  try {
+    home = await call("home");
+  } catch (error) {
+    $("#home-line").textContent = String(error.message || error);
+    return;
+  }
+  $("#home-line").textContent = `${home.notes} notes in your notebook.` + (home.ai_week ? ` ${home.ai_week} AI sessions captured this week.` : "");
+
+  const dream = $("#home-dream");
+  const d = home.dream;
+  if (!d) {
+    dream.innerHTML = `<div class="home-title">☾ Dream</div><p class="muted">Dream hasn't looked at this notebook yet. Leave FastMind running tonight, or start it now.</p>
+      <div class="row gap"><button class="primary" data-go="dream-now">Dream now</button></div>`;
+  } else {
+    const kinds = Object.entries(d.kinds || {}).map(([k, n]) => `${n} ${({ merge: "to merge", topic: "to gather", archive: "to archive", fixlink: n === 1 ? "link to fix" : "links to fix", pack: "to pack" })[k] || k}`).join(" · ");
+    dream.innerHTML = `<div class="home-title">☾ While you slept <span class="muted small">${esc(ago(d.ran_at))}</span></div>
+      <div class="stats compact"><div class="stat"><div class="num">${d.before}<span class="arrow">→</span>${d.after}</div><div class="label">notes, if you accept everything</div></div></div>
+      <p class="muted">${d.pending ? `${d.pending} proposals waiting: ${esc(kinds)}.` : "Nothing waiting. The notebook is tidy."}${d.applied ? ` ${d.applied} already applied.` : ""}</p>
+      <div class="row gap">${d.pending ? `<button class="primary" data-go="dream">Review ${d.pending}</button>` : `<button data-go="dream">See what Dream did</button>`}</div>`;
+  }
+
+  const inbox = $("#home-inbox");
+  inbox.innerHTML = `<div class="home-title">✎ Inbox <span class="muted small">${home.inbox_count ? home.inbox_count + " to file" : "empty"}</span></div>`
+    + (home.inbox.length
+      ? `<ul class="mini">${home.inbox.map((n) => `<li><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a><span class="muted small"> · ${esc(ago(n.captured))}</span></li>`).join("")}</ul>
+         <div class="row gap"><button class="primary" data-go="inbox">File them</button></div>`
+      : `<p class="muted">Inbox zero. Capture something and it lands here.</p>`);
+
+  const back = $("#home-resurfaced");
+  back.innerHTML = `<div class="home-title">↺ From your notebook</div>`
+    + (home.resurfaced.length
+      ? home.resurfaced.map((n) => `<div class="resurfaced"><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a>
+          <div class="muted small">${n.age_days} days old · ${esc(n.path)}</div><div class="snippet">${esc(unlink(n.snippet))}</div></div>`).join("")
+      : `<p class="muted">Notes come back here once they're a month old, so the good ones don't get lost.</p>`);
+
+  const recent = $("#home-recent");
+  recent.innerHTML = `<div class="home-title">◷ Recently</div>`
+    + (home.recent.length
+      ? `<ul class="mini">${home.recent.map((n) => `<li><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a>${n.kind === "ai-session" ? ' <span class="pill ai">AI</span>' : ""}<span class="muted small"> · ${esc(ago(n.touched))}</span></li>`).join("")}</ul>`
+      : `<p class="muted">Nothing yet.</p>`);
+  if (!home.ai_enabled) {
+    recent.innerHTML += `<p class="muted small tip">Tip: turn on <a href="#" data-go="settings">Learn from AI sessions</a> and your Claude Code and Codex sessions become searchable notes.</p>`;
+  }
+}
+
+$("#view-home").addEventListener("click", async (event) => {
+  const link = event.target.closest("[data-read],[data-go]");
+  if (!link) return;
+  event.preventDefault();
+  if (link.dataset.read) { show("remember"); readNote(link.dataset.read); return; }
+  const go = link.dataset.go;
+  if (go === "dream-now") { show("dream"); $("#dream-now").click(); return; }
+  show(go);
+});
+
+$("#home-capture").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const area = $("#home-capture-text");
+  if (await saveCapture(area.value)) { area.value = ""; loadHome(); }
+});
+$("#home-capture-text").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $("#home-capture").requestSubmit(); }
+});
 
 // ---------- Remember ----------
 let searchTimer;
@@ -732,6 +801,7 @@ async function saveCapture(text) {
     toast(`Saved "${saved.title}"`);
     refreshStatus();
     if (current === "inbox") loadInbox();
+    if (current === "home") loadHome();
     if (current === "remember") runSearch($("#query").value, true);
     return true;
   } catch (error) {
@@ -799,9 +869,8 @@ document.addEventListener("keydown", (event) => {
 
 function startMain() {
   $("#app").hidden = false;
-  let first = "remember";
-  try { first = localStorage.getItem("fastmind.view") || first; } catch {}
-  show(views.includes(first) ? first : "remember");
+  // FastMind opens on Home: the morning page.
+  show("home");
   refreshStatus();
   if (tauri) {
     tauri.event.listen("focus-remember", () => { show("remember"); $("#query").select(); });
