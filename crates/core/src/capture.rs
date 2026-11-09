@@ -253,10 +253,10 @@ pub fn page_info(url: &str) -> Option<(String, Option<String>)> {
                 .or_else(|| attr("name"))
                 .unwrap_or_default()
                 .to_lowercase();
-            if names.contains(&key.as_str()) {
-                if let Some(content) = attr("content").filter(|c| !c.trim().is_empty()) {
-                    return Some(unescape(content.trim()));
-                }
+            if names.contains(&key.as_str())
+                && let Some(content) = attr("content").filter(|c| !c.trim().is_empty())
+            {
+                return Some(unescape(content.trim()));
             }
         }
         None
