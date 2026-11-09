@@ -302,6 +302,8 @@ fn main() {
             .skip_taskbar(true)
             .visible(false)
             .center()
+            // Dropped files go to the page, which attaches them to the capture.
+            .disable_drag_drop_handler()
             .build()?;
 
             let capture = MenuItem::with_id(app, "capture", "Capture…", true, None::<&str>)?;

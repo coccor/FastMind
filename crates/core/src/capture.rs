@@ -22,6 +22,22 @@ pub struct Capture {
     /// Folder inside the notebook; the inbox by default.
     #[serde(default)]
     pub folder: Option<String>,
+    /// Files pasted or dropped into a window that can't give their paths (a browser): the
+    /// bytes, base64-encoded.
+    #[serde(default)]
+    pub files: Vec<InlineFile>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct InlineFile {
+    pub name: String,
+    /// Base64, with or without a `data:…;base64,` prefix.
+    pub data: String,
+}
+
+enum Source<'a> {
+    Path(&'a std::path::Path),
+    Bytes(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,7 +62,35 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
         None if is_url(body_text) => (String::new(), Some(body_text.to_owned())),
         None => (body_text.to_owned(), None),
     };
-    if body_text.is_empty() && url.is_none() && capture.attachments.is_empty() {
+    let mut sources: Vec<(String, Source)> = capture
+        .attachments
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".into());
+            (name, Source::Path(path.as_path()))
+        })
+        .collect();
+    for file in &capture.files {
+        let data = file
+            .data
+            .split_once(";base64,")
+            .map_or(file.data.as_str(), |(_, data)| data);
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data.trim())
+            .map_err(|_| Error::msg(format!("{} couldn't be read", file.name)))?;
+        if bytes.len() as u64 > MAX_ATTACHMENT {
+            return Err(Error::msg(format!("{} is over 50 MB", file.name)));
+        }
+        let name = if file.name.trim().is_empty() {
+            "pasted.png".to_owned()
+        } else {
+            file.name.clone()
+        };
+        sources.push((name, Source::Bytes(bytes)));
+    }
+    if body_text.is_empty() && url.is_none() && sources.is_empty() {
         return Err(Error::msg("nothing to capture"));
     }
     if body_text.len() > MAX_TEXT {
@@ -61,7 +105,11 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
     }
 
     let now = Local::now();
-    let title = title_for(&body_text, url.as_deref(), &capture.attachments)
+    let names: Vec<PathBuf> = sources
+        .iter()
+        .map(|(name, _)| PathBuf::from(name))
+        .collect();
+    let title = title_for(&body_text, url.as_deref(), &names)
         .unwrap_or_else(|| format!("Capture {}", now.format("%Y-%m-%d %H.%M")));
     let folder = capture
         .folder
@@ -120,15 +168,11 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
 
     // Attachments are written first; if the note then fails, they are removed again.
     let mut written: Vec<PathBuf> = Vec::new();
-    if !capture.attachments.is_empty() {
+    if !sources.is_empty() {
         let attach_dir = dir.join("attachments");
         fs::create_dir_all(&attach_dir)?;
         body.push_str("## Attachments\n\n");
-        for file in &capture.attachments {
-            let original = file
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
+        for (original, source) in &sources {
             let (stem, ext) = match original.rfind('.') {
                 Some(at) => (original[..at].to_owned(), original[at + 1..].to_owned()),
                 None => (original.clone(), String::new()),
@@ -137,7 +181,11 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
                 attach_dir.join(name).exists()
             });
             let target = attach_dir.join(&free);
-            if let Err(error) = fs::copy(file, &target) {
+            let result = match source {
+                Source::Path(path) => fs::copy(path, &target).map(|_| ()),
+                Source::Bytes(bytes) => fs::write(&target, bytes),
+            };
+            if let Err(error) = result {
                 for path in written {
                     let _ = fs::remove_file(path);
                 }
@@ -165,6 +213,98 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
         return Err(error);
     }
     Ok(Saved { path: rel, title })
+}
+
+/// What a web page says it is: its title and description, from `<title>`, Open Graph and
+/// `description` meta tags. Fetched once, like a browser but without cookies, within a few
+/// seconds and 1 MB.
+pub fn page_info(url: &str) -> Option<(String, Option<String>)> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(4))
+        .timeout(std::time::Duration::from_secs(8))
+        .redirects(5)
+        .user_agent("Mozilla/5.0 (FastMind; +https://github.com/coccor/FastMind)")
+        .build();
+    let response = agent.get(url).call().ok()?;
+    if !response.content_type().contains("html") {
+        return None;
+    }
+    let mut html = String::new();
+    std::io::Read::read_to_string(
+        &mut std::io::Read::take(response.into_reader(), 1_000_000),
+        &mut html,
+    )
+    .ok()?;
+    let head = &html[..html.find("</head>").unwrap_or(html.len().min(200_000))];
+    let meta = |names: &[&str]| -> Option<String> {
+        static TAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let tag = TAG.get_or_init(|| regex::Regex::new(r#"(?is)<meta\s[^>]*>"#).expect("valid"));
+        for found in tag.find_iter(head) {
+            let tag = found.as_str();
+            let attr = |name: &str| {
+                let pattern = format!(r#"(?is)\b{name}\s*=\s*("([^"]*)"|'([^']*)')"#);
+                regex::Regex::new(&pattern)
+                    .ok()?
+                    .captures(tag)
+                    .and_then(|c| c.get(2).or(c.get(3)))
+                    .map(|m| m.as_str().to_owned())
+            };
+            let key = attr("property")
+                .or_else(|| attr("name"))
+                .unwrap_or_default()
+                .to_lowercase();
+            if names.contains(&key.as_str()) {
+                if let Some(content) = attr("content").filter(|c| !c.trim().is_empty()) {
+                    return Some(unescape(content.trim()));
+                }
+            }
+        }
+        None
+    };
+    let title = meta(&["og:title", "twitter:title"]).or_else(|| {
+        let start = head.to_lowercase().find("<title")?;
+        let open = head[start..].find('>')? + start + 1;
+        let close = head[open..].to_lowercase().find("</title>")? + open;
+        Some(unescape(head[open..close].trim()))
+    })?;
+    let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() {
+        return None;
+    }
+    let description = meta(&["og:description", "description", "twitter:description"]);
+    Some((title, description))
+}
+
+fn unescape(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ")
+}
+
+/// After a link capture is saved: the page's own title and description go into the note, if
+/// the note is still as it was saved.
+pub fn enrich_link(nb: &Notebook, saved: &Saved, url: &str) -> Result<bool> {
+    let Some((page_title, description)) = page_info(url) else {
+        return Ok(false);
+    };
+    let path = nb.path(&saved.path)?;
+    let text = fs::read_to_string(&path)?;
+    let heading = format!("# {}\n", saved.title);
+    if !text.contains(&heading) {
+        return Ok(false);
+    }
+    let title = text::excerpt(&page_title, 120);
+    let mut replacement = format!("# {title}\n");
+    if let Some(description) = description {
+        replacement.push_str(&format!("\n> {}\n", text::excerpt(&description, 400)));
+    }
+    let updated = text.replacen(&heading, &replacement, 1);
+    fsx::write_atomic(&path, updated.as_bytes())?;
+    Ok(true)
 }
 
 fn title_for(text: &str, url: Option<&str>, attachments: &[PathBuf]) -> Option<String> {
@@ -351,6 +491,31 @@ mod tests {
             "{text}"
         );
         assert!(nb.root.join("inbox/attachments/screen shot.png").exists());
+    }
+
+    #[test]
+    fn pasted_files_arrive_as_attachments() {
+        let dir = tempfile::tempdir().unwrap();
+        let nb = Notebook::open(dir.path()).unwrap();
+        let saved = save(
+            &nb,
+            "inbox",
+            &Capture {
+                text: "The broken dialog".into(),
+                files: vec![InlineFile {
+                    name: "shot.png".into(),
+                    data: "data:image/png;base64,iVBORw0KGgo=".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(nb.root.join(&saved.path)).unwrap();
+        assert!(text.contains("![shot.png](attachments/shot.png)"), "{text}");
+        assert_eq!(
+            fs::read(nb.root.join("inbox/attachments/shot.png")).unwrap()[..4],
+            [0x89, b'P', b'N', b'G']
+        );
     }
 
     #[test]

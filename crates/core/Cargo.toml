@@ -13,6 +13,7 @@ zip.workspace = true
 ureq.workspace = true
 directories.workspace = true
 regex = "1"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile.workspace = true

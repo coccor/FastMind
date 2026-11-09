@@ -21,6 +21,8 @@ pub struct Settings {
     pub model: ModelSettings,
     /// Start with the computer.
     pub autostart: bool,
+    /// A captured link gets its page's title and description (one request to that page).
+    pub fetch_link_titles: bool,
     /// Learn from AI sessions (off until chosen).
     pub ai: crate::sessions::AiSettings,
 }
@@ -73,6 +75,7 @@ impl Default for Settings {
             dream: DreamSettings::default(),
             model: ModelSettings::None,
             autostart: false,
+            fetch_link_titles: true,
             ai: crate::sessions::AiSettings::default(),
         }
     }

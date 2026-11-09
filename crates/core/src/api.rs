@@ -96,6 +96,21 @@ impl App {
                     serde_json::from_value(args).map_err(|e| Error::msg(e.to_string()))?;
                 let saved = capture::save(&nb, &self.settings().inbox, &request)?;
                 self.invalidate();
+                // A link gets its page's title and description in the background: saving
+                // never waits on the network.
+                let link = request
+                    .url
+                    .clone()
+                    .filter(|u| !u.trim().is_empty())
+                    .or_else(|| {
+                        capture::is_url(request.text.trim()).then(|| request.text.trim().to_owned())
+                    });
+                if let (Some(url), true) = (link, self.settings().fetch_link_titles) {
+                    let (nb, saved) = (nb.clone(), saved.clone());
+                    std::thread::spawn(move || {
+                        let _ = capture::enrich_link(&nb, &saved, &url);
+                    });
+                }
                 json!(saved)
             }
             "search" => {
@@ -128,6 +143,29 @@ impl App {
             }
             "inbox" => json!(self.inbox(&nb)),
             "home" => self.home(&nb, now),
+            "image" => {
+                // An image inside the notebook, for showing in a note. Nothing else is served.
+                let path: String = arg(&args, "path")?;
+                let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let mime = match ext.as_str() {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    "bmp" => "image/bmp",
+                    "svg" => "image/svg+xml",
+                    _ => return Err(Error::msg("not an image")),
+                };
+                let file = nb.path(&path)?;
+                let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+                if size > 15 * 1024 * 1024 {
+                    return Err(Error::msg("image too large to show"));
+                }
+                let bytes = std::fs::read(&file)?;
+                let data =
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+                json!({ "data": format!("data:{mime};base64,{data}") })
+            }
             "suggest_homes" => {
                 let path: String = arg(&args, "path")?;
                 let settings = self.settings();

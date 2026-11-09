@@ -12,9 +12,10 @@
   <section id="capture-only" class="capture-only" hidden>
     <form id="capture-form-mini" class="capture-box">
       <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ inbox</span></div>
-      <textarea id="capture-text-mini" placeholder="What do you want to keep? A thought, a link, a fix… #tags work" autofocus></textarea>
+      <textarea id="capture-text-mini" placeholder="What do you want to keep? A thought, a link, a fix… #tags work. Paste or drop screenshots and files." autofocus></textarea>
+      <div class="attachments" id="capture-files-mini" hidden></div>
       <div class="capture-footer">
-        <span class="muted small" id="capture-hint-mini">Ctrl+Enter saves · Esc closes</span>
+        <span class="muted small" id="capture-hint-mini">Ctrl+Enter saves · Esc closes and keeps a draft</span>
         <button type="submit" class="primary">Save</button>
       </div>
     </form>
@@ -41,7 +42,8 @@
       <section class="view" id="view-home" hidden>
         <header class="view-head"><h1 id="home-greeting">Good morning</h1><p class="muted" id="home-line"></p></header>
         <form id="home-capture" class="home-capture">
-          <textarea id="home-capture-text" placeholder="What's on your mind? Ctrl+Enter saves it to the inbox. #tags work."></textarea>
+          <textarea id="home-capture-text" placeholder="What's on your mind? Ctrl+Enter saves it to the inbox. #tags work; paste or drop screenshots and files."></textarea>
+          <div class="attachments" id="home-capture-files" hidden></div>
           <div class="row gap"><button class="primary" type="submit">Save</button><span class="muted small">Or press the capture key from anywhere.</span></div>
         </form>
         <div class="home-grid">
@@ -186,7 +188,8 @@
   <dialog id="capture-dialog" class="capture-dialog">
     <form id="capture-form" class="capture-box" method="dialog">
       <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ inbox</span></div>
-      <textarea id="capture-text" placeholder="What do you want to keep? A thought, a link, a fix… #tags work"></textarea>
+      <textarea id="capture-text" placeholder="What do you want to keep? A thought, a link, a fix… #tags work. Paste or drop screenshots and files."></textarea>
+      <div class="attachments" id="capture-files" hidden></div>
       <div class="capture-footer">
         <span class="muted small">Ctrl+Enter saves · Esc closes</span>
         <span><button type="button" id="capture-cancel">Cancel</button> <button type="submit" class="primary">Save</button></span>

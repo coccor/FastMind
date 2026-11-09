@@ -82,6 +82,9 @@ function renderMarkdown(text) {
   }
   const inline = (line) =>
     esc(line)
+      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, src) =>
+        /^https?:/.test(src) ? `<span class="muted">[image: ${alt}]</span>` : `<img class="note-image" alt="${alt}" data-src="${src}">`)
+      .replace(/!\[\[([^\]|]+\.(?:png|jpe?g|gif|webp|bmp|svg))(?:\|[^\]]*)?\]\]/gi, (_, src) => `<img class="note-image" alt="${src}" data-src="${src}" data-wiki="1">`)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
@@ -212,10 +215,12 @@ $("#view-home").addEventListener("click", async (event) => {
   show(go);
 });
 
+const homeFiles = attachable($("#home-capture-text"), $("#home-capture-files"));
+const clearHomeDraft = keepDraft($("#home-capture-text"), "fastmind.draft.home");
 $("#home-capture").addEventListener("submit", async (event) => {
   event.preventDefault();
   const area = $("#home-capture-text");
-  if (await saveCapture(area.value)) { area.value = ""; loadHome(); }
+  if (await saveCapture(area.value, homeFiles.files)) { area.value = ""; homeFiles.clear(); clearHomeDraft(); loadHome(); }
 });
 $("#home-capture-text").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $("#home-capture").requestSubmit(); }
@@ -304,10 +309,31 @@ async function readNote(path, archivedId) {
     $("#edit-note").addEventListener("click", () => editNote());
     $("#close-reader").addEventListener("click", () => { reader.hidden = true; selected = null; });
     wireLinks(reader);
+    loadImages(reader, path);
     loadRelated(path);
   } catch (error) {
     toast(String(error.message || error), true);
   }
+}
+
+// Images in a note load through FastMind (the page can't read local files itself).
+function loadImages(root, notePath) {
+  const folder = notePath.includes("/") ? notePath.slice(0, notePath.lastIndexOf("/") + 1) : "";
+  root.querySelectorAll("img.note-image[data-src]").forEach(async (img) => {
+    let src = decodeURIComponent(img.dataset.src);
+    const parts = (folder + src).split("/");
+    const out = [];
+    for (const part of parts) { if (part === "..") out.pop(); else if (part && part !== ".") out.push(part); }
+    const candidates = [out.join("/"), folder + "attachments/" + src.split("/").pop()];
+    for (const path of candidates) {
+      try {
+        const { data } = await call("image", { path });
+        img.src = data;
+        return;
+      } catch {}
+    }
+    img.replaceWith(Object.assign(document.createElement("span"), { className: "muted", textContent: `[missing image: ${src}]` }));
+  });
 }
 
 function wireLinks(root) {
@@ -794,10 +820,58 @@ $("#make-demo").addEventListener("click", async () => {
 });
 
 // ---------- Capture ----------
-async function saveCapture(text) {
-  if (!text.trim()) return false;
+const MAX_FILE = 50 * 1024 * 1024;
+
+// A capture box that takes pasted screenshots and dropped files, shown as chips under it.
+function attachable(area, chips) {
+  const files = [];
+  const render = () => {
+    chips.hidden = !files.length;
+    chips.innerHTML = files
+      .map((f, i) => `<span class="attach">${/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name) ? "🖼" : "📎"} ${esc(f.name)} <button type="button" title="Remove" data-i="${i}">✕</button></span>`)
+      .join("");
+  };
+  const add = (file) => {
+    if (file.size > MAX_FILE) { toast(`${file.name} is over 50 MB`, true); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+      files.push({ name: file.name || `pasted ${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.${ext}`, data: reader.result });
+      render();
+    };
+    reader.readAsDataURL(file);
+  };
+  area.addEventListener("paste", (event) => {
+    const pasted = [...(event.clipboardData?.files || [])];
+    if (pasted.length) { event.preventDefault(); pasted.forEach(add); }
+  });
+  const target = area.closest("form") || area;
+  target.addEventListener("dragover", (event) => { event.preventDefault(); target.classList.add("dropping"); });
+  target.addEventListener("dragleave", () => target.classList.remove("dropping"));
+  target.addEventListener("drop", (event) => {
+    event.preventDefault();
+    target.classList.remove("dropping");
+    [...(event.dataTransfer?.files || [])].forEach(add);
+  });
+  chips.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (button) { files.splice(Number(button.dataset.i), 1); render(); }
+  });
+  render();
+  return { files, clear() { files.length = 0; render(); } };
+}
+
+// What you typed in a capture box survives closing it: Esc keeps a draft for next time.
+function keepDraft(area, key) {
+  try { area.value = localStorage.getItem(key) || area.value; } catch {}
+  area.addEventListener("input", () => { try { localStorage.setItem(key, area.value); } catch {} });
+  return () => { try { localStorage.removeItem(key); } catch {} };
+}
+
+async function saveCapture(text, files = []) {
+  if (!text.trim() && !files.length) return false;
   try {
-    const saved = await call("capture", { text });
+    const saved = await call("capture", { text, files });
     toast(`Saved "${saved.title}"`);
     refreshStatus();
     if (current === "inbox") loadInbox();
@@ -810,6 +884,9 @@ async function saveCapture(text) {
   }
 }
 
+const dialogFiles = attachable($("#capture-text"), $("#capture-files"));
+const clearDialogDraft = keepDraft($("#capture-text"), "fastmind.draft.dialog");
+
 function openCapture() {
   $("#capture-dialog").showModal();
   $("#capture-text").focus();
@@ -819,8 +896,10 @@ $("#capture-open").addEventListener("click", openCapture);
 $("#capture-cancel").addEventListener("click", () => $("#capture-dialog").close());
 $("#capture-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (await saveCapture($("#capture-text").value)) {
+  if (await saveCapture($("#capture-text").value, dialogFiles.files)) {
     $("#capture-text").value = "";
+    dialogFiles.clear();
+    clearDialogDraft();
     $("#capture-dialog").close();
   }
 });
@@ -882,12 +961,16 @@ function startMain() {
 function startCaptureOnly() {
   $("#capture-only").hidden = false;
   const area = $("#capture-text-mini");
+  const files = attachable(area, $("#capture-files-mini"));
+  const clearDraft = keepDraft(area, "fastmind.draft.window");
   const close = () => (tauri ? tauri.core.invoke("hide_capture") : window.close());
   area.focus();
   $("#capture-form-mini").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (await saveCapture(area.value)) {
+    if (await saveCapture(area.value, files.files)) {
       area.value = "";
+      files.clear();
+      clearDraft();
       close();
     }
   });
