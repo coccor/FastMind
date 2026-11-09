@@ -27,6 +27,106 @@ pub fn build_index(nb: &Notebook) -> Index {
     Index::build(&notes, archived)
 }
 
+/// A search index kept current cheaply: each refresh looks at file sizes and times, and reads
+/// only the notes that changed since.
+#[derive(Default)]
+pub struct LiveIndex {
+    root: std::path::PathBuf,
+    docs: std::collections::HashMap<
+        String,
+        (std::time::SystemTime, u64, crate::search::Doc, crate::Note),
+    >,
+    archive_key: String,
+    index: Option<Index>,
+}
+
+impl LiveIndex {
+    pub fn refresh(&mut self, nb: &Notebook) -> &Index {
+        if self.root != nb.root {
+            *self = LiveIndex {
+                root: nb.root.clone(),
+                ..Default::default()
+            };
+        }
+        let mut files = Vec::new();
+        crate::fsx::walk_with_meta(&nb.root, &crate::notebook::skip_dir, &mut files);
+        let mut changed = false;
+        let mut seen = std::collections::HashSet::new();
+        for (path, size, modified) in files
+            .iter()
+            .filter(|(p, _, _)| crate::notebook::is_note_file(p))
+        {
+            let Some(rel) = crate::fsx::relative(&nb.root, path) else {
+                continue;
+            };
+            seen.insert(rel.clone());
+            let fresh = self
+                .docs
+                .get(&rel)
+                .is_some_and(|(at, known, _, _)| at == modified && known == size);
+            if fresh {
+                continue;
+            }
+            if let Ok(note) = nb.read(&rel) {
+                let doc = crate::search::doc(&note, None);
+                self.docs.insert(rel, (*modified, *size, doc, note));
+                changed = true;
+            }
+        }
+        let before = self.docs.len();
+        self.docs.retain(|rel, _| seen.contains(rel));
+        changed |= self.docs.len() != before;
+        let archive = ArchiveIndex::load(nb);
+        let archive_key = archive
+            .loose()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        changed |= archive_key != self.archive_key;
+        if changed || self.index.is_none() {
+            let mut docs: Vec<crate::search::Doc> = self
+                .docs
+                .values()
+                .map(|(_, _, doc, _)| doc.clone())
+                .collect();
+            for item in archive.loose().filter(|item| item.stored.ends_with(".md")) {
+                if let Ok(bytes) = archive::read(nb, item) {
+                    let note = build_note(
+                        item.original.clone(),
+                        String::from_utf8_lossy(&bytes).into_owned(),
+                        item.size,
+                        item.archived_at,
+                    );
+                    docs.push(crate::search::doc(&note, Some(item.id.clone())));
+                }
+            }
+            docs.sort_by(|a, b| a.path.cmp(&b.path));
+            self.index = Some(Index::from_docs(docs));
+            self.archive_key = archive_key;
+        }
+        self.index.as_ref().expect("built")
+    }
+
+    /// Every note as last read, sorted by path. Call after `refresh`.
+    pub fn notes(&self) -> Vec<crate::Note> {
+        let mut notes: Vec<crate::Note> = self
+            .docs
+            .values()
+            .map(|(_, _, _, note)| note.clone())
+            .collect();
+        notes.sort_by(|a, b| a.path.cmp(&b.path));
+        notes
+    }
+
+    /// The index as it is, building it only when there's none yet.
+    pub fn refresh_if_built(&mut self, nb: &Notebook) -> &Index {
+        if self.index.is_none() || self.root != nb.root {
+            return self.refresh(nb);
+        }
+        self.index.as_ref().expect("built")
+    }
+}
+
 pub fn search(nb: &Notebook, index: &Index, query: &str, limit: usize) -> Vec<Hit> {
     let usage = Usage::load(nb);
     index.search(query, limit, &|path| usage.boost(path))

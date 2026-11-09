@@ -21,14 +21,14 @@ use std::time::{Duration, Instant};
 
 pub struct App {
     settings: Mutex<Settings>,
-    index: Mutex<Option<(PathBuf, Instant, Index)>>,
+    index: Mutex<(Option<Instant>, remember::LiveIndex)>,
     /// Set while Dream runs, so a second run waits its turn.
     dreaming: Mutex<()>,
     persist: bool,
 }
 
 /// How long a search index is reused before the files are read again.
-const INDEX_FRESH: Duration = Duration::from_secs(5);
+const INDEX_FRESH: Duration = Duration::from_secs(1);
 
 fn arg<T: for<'de> Deserialize<'de>>(args: &Value, key: &str) -> Result<T> {
     serde_json::from_value(args.get(key).cloned().unwrap_or(Value::Null))
@@ -40,7 +40,7 @@ impl App {
     pub fn new(settings: Settings) -> Self {
         Self {
             settings: Mutex::new(settings),
-            index: Mutex::new(None),
+            index: Mutex::new((None, remember::LiveIndex::default())),
             dreaming: Mutex::new(()),
             persist: true,
         }
@@ -74,19 +74,34 @@ impl App {
     }
 
     pub fn invalidate(&self) {
-        *self.index.lock().expect("index lock") = None;
+        self.index.lock().expect("index lock").0 = None;
     }
 
+    /// The search index, refreshed from the files at most every second (only changed notes are
+    /// read again), or right away after FastMind itself changed something.
     fn with_index<T>(&self, nb: &Notebook, use_it: impl FnOnce(&Index) -> T) -> T {
         let mut guard = self.index.lock().expect("index lock");
-        let stale = match &*guard {
-            Some((root, built, _)) => *root != nb.root || built.elapsed() > INDEX_FRESH,
-            None => true,
+        let (checked, live) = &mut *guard;
+        let index = if checked.is_none_or(|at| at.elapsed() > INDEX_FRESH) {
+            *checked = Some(Instant::now());
+            live.refresh(nb)
+        } else {
+            live.refresh_if_built(nb)
         };
-        if stale {
-            *guard = Some((nb.root.clone(), Instant::now(), remember::build_index(nb)));
+        use_it(index)
+    }
+
+    /// Every note, from the same cache as search: only notes changed since are read again.
+    fn notes(&self, nb: &Notebook) -> Vec<crate::Note> {
+        let mut guard = self.index.lock().expect("index lock");
+        let (checked, live) = &mut *guard;
+        if checked.is_none_or(|at| at.elapsed() > INDEX_FRESH) {
+            *checked = Some(Instant::now());
+            live.refresh(nb);
+        } else {
+            live.refresh_if_built(nb);
         }
-        use_it(&guard.as_ref().expect("built").2)
+        live.notes()
     }
 
     pub fn call(&self, name: &str, args: Value) -> Result<Value> {
@@ -186,7 +201,7 @@ impl App {
                     &settings.ai.folder
                 )))
             }
-            "folders" => json!(crate::filing::folders(&nb)),
+            "folders" => json!(crate::filing::folders(&self.notes(&nb))),
             "file_note" => {
                 let path: String = arg(&args, "path")?;
                 let folder: Option<String> = arg(&args, "folder").unwrap_or(None);
@@ -197,7 +212,7 @@ impl App {
             }
             "related" => {
                 let path: String = arg(&args, "path")?;
-                let notes = nb.notes();
+                let notes = self.notes(&nb);
                 let inbound = crate::notebook::backlinks(&notes);
                 let linked_from: Vec<Value> = inbound
                     .get(&path)
@@ -454,7 +469,7 @@ impl App {
 
     fn status(&self, nb: &Notebook) -> Value {
         let settings = self.settings();
-        let notes = nb.notes();
+        let notes = self.notes(nb);
         let inbox = notes.iter().filter(|note| note.status() == "inbox").count();
         let latest = dream::latest(nb);
         let pending = latest.as_ref().map_or(0, |report| report.pending().count());
@@ -475,7 +490,7 @@ impl App {
     /// The morning page: what Dream did and proposes, what's waiting, what's recent, and two
     /// older notes brought back so they aren't forgotten.
     fn home(&self, nb: &Notebook, now: chrono::DateTime<Local>) -> Value {
-        let notes = nb.notes();
+        let notes = self.notes(nb);
         let latest = dream::latest(nb);
         let dream = latest.as_ref().map(|report| {
             let applied: Vec<&dream::Proposal> =
@@ -551,8 +566,8 @@ impl App {
 
     fn inbox(&self, nb: &Notebook) -> Vec<Value> {
         let inbox = self.settings().inbox;
-        let mut notes: Vec<_> = nb
-            .notes()
+        let mut notes: Vec<_> = self
+            .notes(nb)
             .into_iter()
             .filter(|note| {
                 note.status() == "inbox" || (note.folder() == inbox && note.status().is_empty())
@@ -578,7 +593,7 @@ impl App {
     }
 
     fn recent(&self, nb: &Notebook, limit: usize) -> Vec<Value> {
-        let mut notes = nb.notes();
+        let mut notes = self.notes(nb);
         notes.sort_by_key(|note| std::cmp::Reverse(note.touched));
         notes
             .iter()

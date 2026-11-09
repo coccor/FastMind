@@ -79,9 +79,8 @@ pub fn suggest(index: &Index, path: &str, inbox: &str, ai_folder: &str) -> Vec<H
 }
 
 /// Every folder in the notebook, for filing somewhere else.
-pub fn folders(nb: &Notebook) -> Vec<String> {
-    let mut out: Vec<String> = nb
-        .notes()
+pub fn folders(notes: &[crate::Note]) -> Vec<String> {
+    let mut out: Vec<String> = notes
         .iter()
         .map(|note| note.folder().to_owned())
         .flat_map(|folder| {
@@ -294,7 +293,10 @@ mod tests {
             "{home}"
         );
         assert!(!nb.root.join("inbox/Vacuum freeze.md").exists());
-        assert_eq!(folders(&nb), vec!["home", "ideas", "work", "work/db"]);
+        assert_eq!(
+            folders(&nb.notes()),
+            vec!["home", "ideas", "work", "work/db"]
+        );
     }
 
     #[test]

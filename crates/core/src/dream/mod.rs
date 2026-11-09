@@ -325,8 +325,17 @@ pub fn run(
         analyze::cosine(&features[a].vector, &features[b].vector)
             + if shared_tag { 0.1 } else { 0.0 }
     };
+    let is_fragment: Vec<bool> = {
+        let mut flags = vec![false; notes.len()];
+        for i in &fragments {
+            flags[*i] = true;
+        }
+        flags
+    };
+    let fragment_pairs = analyze::candidate_pairs(&features, &is_fragment);
     let clusters = analyze::topic_clusters(
         &fragments,
+        &fragment_pairs,
         &similarity,
         settings.topic_similarity,
         settings.topic_min_notes.max(2),
@@ -564,8 +573,17 @@ pub fn run(
         });
     }
 
-    // 4. Broken links that clearly meant an existing note.
+    // 4. Broken links that clearly meant an existing note. Names are grouped by first letter:
+    // a typo rarely hits the first one, and comparing every name with every broken link
+    // would take minutes in a large notebook.
     let resolver = Resolver::new(&notes);
+    let mut names_by_first: HashMap<Option<char>, Vec<(&String, &str)>> = HashMap::new();
+    for (name, path) in resolver.names() {
+        names_by_first
+            .entry(name.chars().next())
+            .or_default()
+            .push((name, *path));
+    }
     for note in &notes {
         let mut seen = HashSet::new();
         for target in &note.links {
@@ -581,8 +599,13 @@ pub fn run(
                 continue;
             }
             let limit = if wanted.chars().count() >= 8 { 2 } else { 1 };
-            let mut matches: Vec<&str> = resolver
-                .names()
+            let first = wanted.chars().next();
+            let length = wanted.chars().count();
+            let mut matches: Vec<&str> = names_by_first
+                .get(&first)
+                .into_iter()
+                .flatten()
+                .filter(|(name, _)| name.chars().count().abs_diff(length) <= limit)
                 .filter(|(name, _)| text::within_edits(name, &wanted, limit))
                 .map(|(_, path)| *path)
                 .collect();

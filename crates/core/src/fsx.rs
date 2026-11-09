@@ -115,6 +115,36 @@ pub fn safe_stem(title: &str) -> String {
     stem
 }
 
+/// Like `walk`, with each file's size and modification time from the directory listing
+/// itself (on Windows that costs nothing extra; a separate `metadata` call opens the file).
+pub fn walk_with_meta(
+    dir: &Path,
+    skip: &dyn Fn(&str) -> bool,
+    out: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            if !skip(&entry.file_name().to_string_lossy()) {
+                walk_with_meta(&entry.path(), skip, out);
+            }
+        } else if kind.is_file() {
+            if let Ok(meta) = entry.metadata() {
+                out.push((
+                    entry.path(),
+                    meta.len(),
+                    meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                ));
+            }
+        }
+    }
+}
+
 /// Every file under `dir` (recursively), skipping folders `skip` rejects by name.
 pub fn walk(dir: &Path, skip: &dyn Fn(&str) -> bool, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {

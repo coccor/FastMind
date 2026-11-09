@@ -211,20 +211,21 @@ impl UnionFind {
 }
 
 /// Clusters of at least `min` fragments around a seed, each member alike the seed and the group.
+/// `pairs` are the pairs worth comparing (those sharing a strong word); comparing every pair
+/// would grow with the square of the notebook.
 pub fn topic_clusters(
     candidates: &[usize],
+    pairs: &[(usize, usize)],
     similarity: &dyn Fn(usize, usize) -> f64,
     threshold: f64,
     min: usize,
 ) -> Vec<Vec<usize>> {
     let mut neighbours: HashMap<usize, Vec<(usize, f64)>> = HashMap::new();
-    for (i, a) in candidates.iter().enumerate() {
-        for b in &candidates[i + 1..] {
-            let alike = similarity(*a, *b);
-            if alike >= threshold {
-                neighbours.entry(*a).or_default().push((*b, alike));
-                neighbours.entry(*b).or_default().push((*a, alike));
-            }
+    for (a, b) in pairs {
+        let alike = similarity(*a, *b);
+        if alike >= threshold {
+            neighbours.entry(*a).or_default().push((*b, alike));
+            neighbours.entry(*b).or_default().push((*a, alike));
         }
     }
     let mut order: Vec<usize> = candidates.to_vec();
@@ -436,8 +437,12 @@ mod tests {
             "# Pasta\nBoil water, salt it, cook pasta eight minutes.",
         ]);
         let f = features(&notes);
+        let pairs: Vec<(usize, usize)> = (0..4)
+            .flat_map(|a| (a + 1..4).map(move |b| (a, b)))
+            .collect();
         let clusters = topic_clusters(
             &[0, 1, 2, 3],
+            &pairs,
             &|a, b| cosine(&f[a].vector, &f[b].vector),
             0.2,
             3,

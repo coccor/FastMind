@@ -43,6 +43,8 @@ pub struct Index {
     docs: Vec<Doc>,
     df: HashMap<String, usize>,
     avg_len: f32,
+    /// Every known word, sorted, for prefix and typo lookups.
+    vocab: Vec<String>,
 }
 
 const TITLE: f32 = 4.0;
@@ -57,6 +59,11 @@ impl Index {
                 .iter()
                 .map(|(id, note)| doc(note, Some(id.clone()))),
         );
+        Self::from_docs(docs)
+    }
+
+    /// An index over documents already made, so unchanged notes needn't be read again.
+    pub fn from_docs(docs: Vec<Doc>) -> Self {
         let mut df: HashMap<String, usize> = HashMap::new();
         for doc in &docs {
             for term in doc.terms.keys() {
@@ -68,11 +75,22 @@ impl Index {
         } else {
             docs.iter().map(|doc| doc.len).sum::<f32>() / docs.len() as f32
         };
+        let mut vocab: Vec<String> = df.keys().cloned().collect();
+        vocab.sort();
         Self {
             docs,
             df,
             avg_len: avg_len.max(1.0),
+            vocab,
         }
+    }
+
+    /// Known words starting with `prefix`, from the sorted vocabulary.
+    fn with_prefix<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = &'a String> + 'a {
+        let start = self.vocab.partition_point(|word| word.as_str() < prefix);
+        self.vocab[start..]
+            .iter()
+            .take_while(move |word| word.starts_with(prefix))
     }
 
     pub fn len(&self) -> usize {
@@ -106,9 +124,12 @@ impl Index {
             if self.df.contains_key(&term) {
                 expanded.push((term.clone(), 1.0));
             } else if word.chars().count() >= 4 {
+                // A typo: words starting with the same letter, about as long.
                 let limit = if word.chars().count() >= 7 { 2 } else { 1 };
-                for known in self.df.keys() {
-                    if known.chars().next() == term.chars().next()
+                let length = term.chars().count();
+                let first: String = term.chars().take(1).collect();
+                for known in self.with_prefix(&first) {
+                    if known.chars().count().abs_diff(length) <= limit
                         && text::within_edits(known, &term, limit)
                     {
                         expanded.push((known.clone(), 0.6));
@@ -116,11 +137,9 @@ impl Index {
                 }
             }
             if index == last && word.chars().count() >= 3 {
-                for known in self.df.keys() {
-                    if known.len() > word.len()
-                        && known.starts_with(word.as_str())
-                        && *known != term
-                    {
+                // The word being typed: everything it starts.
+                for known in self.with_prefix(word).take(50) {
+                    if known.len() > word.len() && *known != term {
                         expanded.push((known.clone(), 0.5));
                     }
                 }
@@ -148,7 +167,7 @@ impl Index {
         let phrase = query.trim().to_lowercase();
         let n = self.docs.len() as f32;
         let now = Local::now();
-        let mut hits: Vec<Hit> = Vec::new();
+        let mut scored: Vec<(f32, &Doc)> = Vec::new();
         for doc in &self.docs {
             if !tag_filter
                 .iter()
@@ -183,21 +202,27 @@ impl Index {
                 score *= 0.5;
             }
             score *= boosts(&doc.path);
-            let (snippet, line) = snippet(doc, &terms);
-            hits.push(Hit {
-                path: doc.path.clone(),
-                title: doc.title.clone(),
-                score,
-                snippet,
-                line,
-                archived: doc.archived.clone(),
-                tags: doc.tags.clone(),
-                kind: doc.kind.clone(),
-            });
+            scored.push((score, doc));
         }
-        hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.path.cmp(&b.path)));
-        hits.truncate(limit);
-        hits
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.path.cmp(&b.1.path)));
+        scored.truncate(limit);
+        // Snippets only for the hits shown: finding the best line costs more than scoring.
+        scored
+            .into_iter()
+            .map(|(score, doc)| {
+                let (snippet, line) = snippet(doc, &terms);
+                Hit {
+                    path: doc.path.clone(),
+                    title: doc.title.clone(),
+                    score,
+                    snippet,
+                    line,
+                    archived: doc.archived.clone(),
+                    tags: doc.tags.clone(),
+                    kind: doc.kind.clone(),
+                }
+            })
+            .collect()
     }
 }
 
@@ -255,7 +280,8 @@ impl Index {
     }
 }
 
-fn doc(note: &Note, archived: Option<String>) -> Doc {
+/// A note as search sees it.
+pub fn doc(note: &Note, archived: Option<String>) -> Doc {
     let mut terms: HashMap<String, f32> = HashMap::new();
     let mut add = |source: &str, weight: f32| {
         for term in text::terms(source) {

@@ -388,7 +388,10 @@ fn main() {
                 .build(app)?;
 
             register_hotkeys(&handle, &settings);
-            update_tray(&handle);
+            // Reading a large notebook takes a moment: do it off the startup path, so the tray
+            // and hotkeys are there at once and the first search is instant.
+            let warm = handle.clone();
+            std::thread::spawn(move || update_tray(&warm));
             nightly(handle.clone());
             if !start_hidden {
                 show_main(&handle, None);

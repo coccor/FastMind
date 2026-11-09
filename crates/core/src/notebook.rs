@@ -172,11 +172,16 @@ impl Notebook {
     /// `.fastmind`) and build folders are left out.
     pub fn notes(&self) -> Vec<Note> {
         let mut files = Vec::new();
-        fsx::walk(&self.root, &skip_dir, &mut files);
+        fsx::walk_with_meta(&self.root, &skip_dir, &mut files);
         let mut notes: Vec<Note> = files
             .iter()
-            .filter(|path| is_note_file(path))
-            .filter_map(|path| self.read_path(path).ok())
+            .filter(|(path, _, _)| is_note_file(path))
+            .filter_map(|(path, size, modified)| {
+                let bytes = fs::read(path).ok()?;
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let rel = fsx::relative(&self.root, path)?;
+                Some(build_note(rel, text, *size, DateTime::from(*modified)))
+            })
             .collect();
         notes.sort_by(|a, b| a.path.cmp(&b.path));
         notes
