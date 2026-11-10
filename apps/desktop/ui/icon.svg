@@ -1,12 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6d5dfc"/>
-      <stop offset="1" stop-color="#2bb3c0"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#g)"/>
-  <path d="M40 16a16 16 0 1 0 8 29.9A13 13 0 1 1 40 16z" fill="#fff" opacity=".95"/>
-  <circle cx="44" cy="22" r="2.6" fill="#fff"/>
-  <circle cx="50" cy="31" r="1.8" fill="#fff" opacity=".8"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>FastMind</title>
+  <!-- A head in profile with FastPad's bolt cut out where the mind is. -->
+  <path fill="#8B5CF6" fill-rule="evenodd" d="M80 256V214C40 190 16 152 18 110C20 48 72 6 136 6C196 6 232 48 234 96V110L250 140Q254 150 244 150H236V166Q240 170 236 174V186C236 200 226 208 212 208H198Q182 208 182 224V256Z
+           M116 45H167.8L146.2 92.5H173.6L103 163L121 109.8H94.4Z"/>
 </svg>
