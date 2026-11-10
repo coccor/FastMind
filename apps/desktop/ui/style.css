@@ -112,7 +112,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
 
 /* Remember */
 .search-row { display: flex; gap: 8px; margin-bottom: 14px; }
-.search-row input { flex: 1; font-size: 16px; padding: 10px 14px; }
+.search-row input { flex: 1; min-width: 0; font-size: 16px; padding: 10px 14px; }
 .split { display: grid; grid-template-columns: minmax(280px, 1fr) 1.2fr; gap: 16px; align-items: start; }
 .split:has(.reader[hidden]) { grid-template-columns: 1fr; }
 .results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -201,7 +201,7 @@ legend { font-weight: 650; padding: 0 6px; }
 .capture-title { font-weight: 650; display: flex; align-items: center; gap: 8px; }
 .capture-title .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
 .capture-box textarea { min-height: 140px; resize: vertical; font-size: 15px; border: none; background: var(--bg); }
-.capture-footer { display: flex; justify-content: space-between; align-items: center; }
+.capture-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .capture-only { height: 100vh; padding: 0; }
 /* The window has no frame: the box is the window, edge to edge. */
 .capture-only .capture-box { height: 100%; box-shadow: none; border: none; border-radius: 0; box-sizing: border-box; padding: 10px 12px 12px; }
@@ -210,7 +210,7 @@ legend { font-weight: 650; padding: 0 6px; }
 .capture-close:hover { background: var(--bg); color: var(--text); }
 .capture-box .capture-close { display: none; }
 .capture-only .capture-close { display: inline-block; }
-.capture-only textarea { flex: 1; resize: none; }
+.capture-only textarea { flex: 1; resize: none; min-height: 40px; }
 /* Which notebook the capture goes to, changeable right in the capture window. */
 .capture-nb-wrap { display: none; min-width: 0; }
 .capture-only .capture-nb-wrap { display: inline-flex; }
@@ -225,6 +225,10 @@ legend { font-weight: 650; padding: 0 6px; }
 .toast.error { background: var(--bad); color: #fff; }
 
 .nb-ico { display: none; }
+.view-head > button, .row.gap > button, .toolbar > button { white-space: nowrap; flex-shrink: 0; }
+.settings fieldset { min-width: 0; }
+.settings label > input, .settings label > select { min-width: 0; }
+#settings-file, .nb-item-path { overflow-wrap: anywhere; }
 
 /* Narrow windows (half a screen in a tiling window manager): the sidebar becomes a rail of
    icons, each with its name as a tooltip, so every view stays one click away. */
@@ -243,14 +247,28 @@ legend { font-weight: 650; padding: 0 6px; }
   .notebook-menu { position: fixed; left: 62px; bottom: 12px; width: min(420px, calc(100vw - 78px)); }
   .main { padding: 16px; }
   .split { grid-template-columns: 1fr; }
+  /* One column: the open note sits above the results, not below them out of sight. */
+  .split .reader { order: -1; position: static; max-height: 55vh; }
+  .row.gap { flex-wrap: wrap; }
   .card-head { flex-wrap: wrap; }
   .card-head .grow { flex-basis: 100%; }
   .card .actions { flex-wrap: wrap; }
 }
 
+@media (max-width: 480px) {
+  .main { padding: 14px 12px 28px; }
+  h1 { font-size: 20px; }
+  .card, .reader, .summary-card { padding: 12px; }
+  fieldset { padding: 10px 12px 12px; }
+  .settings label:not(.check) { flex-wrap: wrap; }
+  .keyrow { flex-wrap: wrap; }
+  .settings label:not(.check) > input:not(.tiny), .settings label:not(.check) > select { flex-basis: 100%; }
+  .reader-head { flex-wrap: wrap; }
+}
+
 .keyrow { display: flex; align-items: center; gap: 10px; }
 .keyrow > span:first-child { min-width: 80px; }
-.keyrec { min-width: 200px; text-align: left; font: 13px ui-monospace, monospace; }
+.keyrec { min-width: min(200px, 100%); text-align: left; font: 13px ui-monospace, monospace; }
 .keyrec.recording { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--accent); }
 .keyrec.unset { color: var(--muted); }
 .hotkey-note .actions { display: flex; gap: 8px; flex-wrap: wrap; }
