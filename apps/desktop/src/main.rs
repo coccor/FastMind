@@ -502,6 +502,9 @@ fn main() {
                 .disable_drag_drop_handler()
                 .build()?;
 
+            // Linux trays (libappindicator) send no click events, only the menu: without this
+            // item there would be no way to reach the main window from the tray.
+            let open = MenuItem::with_id(app, "open", "Open FastMind", true, None::<&str>)?;
             let capture = MenuItem::with_id(app, "capture", "Capture…", true, None::<&str>)?;
             let remember = MenuItem::with_id(app, "remember", "Remember…", true, None::<&str>)?;
             let dream = MenuItem::with_id(app, "dream", "Dream now", true, None::<&str>)?;
@@ -514,9 +517,12 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "Quit FastMind", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let separator2 = PredefinedMenuItem::separator(app)?;
+            let separator0 = PredefinedMenuItem::separator(app)?;
             let menu = Menu::with_items(
                 app,
                 &[
+                    &open,
+                    &separator0,
                     &capture,
                     &remember,
                     &separator,
@@ -535,6 +541,7 @@ fn main() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_main(app, None),
                     "capture" => show_capture(app),
                     "remember" => show_main(app, Some("remember")),
                     "dream" => dream_now(app),
