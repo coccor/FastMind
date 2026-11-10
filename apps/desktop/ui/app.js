@@ -950,25 +950,26 @@ document.querySelectorAll(".keyclear").forEach((button) =>
 );
 
 // How the hotkeys are wired. On Wayland the desktop owns global keys: FastMind asks its shortcuts
-// service; on Hyprland, which leaves the keys to its config, a button writes them there.
+// service. Hyprland leaves the keys to the user, so there FastMind binds them itself while it
+// runs, unless that's switched off.
 async function loadHotkeyStatus(status) {
   const note = $("#hotkey-note");
-  if (!tauri) { note.hidden = true; return; }
+  const row = $("#hypr-bind-row");
+  if (!tauri) { note.hidden = row.hidden = true; return; }
   status = status || (await tauri.core.invoke("hotkey_status").catch(() => null));
   const command = "<code>fastmind-desktop --capture</code> (or <code>--remember</code>)";
   const parts = [];
   const hypr = status?.hyprland;
+  row.hidden = !hypr;
   if (status?.how === "native") {
     for (const problem of status.problems || []) parts.push(`<p class="bad">${esc(problem)}</p>`);
   } else if (status?.how === "portal" && hypr) {
-    for (const taken of hypr.conflicts || []) parts.push(`<p class="bad">${esc(taken)} in Hyprland: pick another key, or change that bind.</p>`);
-    if (hypr.installed) {
-      parts.push(`<p>${icon("check")} Set up in <code>${esc(hypr.file)}</code>. FastMind updates it when you change a key here.</p>
-        <div class="actions"><button type="button" data-hotkeys="remove">Remove from Hyprland</button></div>`);
+    if (hypr.off) {
+      parts.push(`<p>FastMind registered its shortcuts with Hyprland; bind keys to them in your config with <code>hl.dsp.global("dev.coccor.fastmind:capture")</code> (and <code>:remember</code>).</p>`);
     } else {
-      parts.push(`<p>Hyprland leaves global keys to its config. FastMind can add these lines to <code>${esc(hypr.file)}</code> (keeping a copy of it) and keep them in step with the keys here:</p>
-        <code class="block">${(hypr.lines || []).map(esc).join("\n")}</code>
-        <div class="actions"><button type="button" class="primary" data-hotkeys="install">Set up the hotkeys</button></div>`);
+      for (const taken of hypr.conflicts || []) parts.push(`<p class="bad">${esc(taken)} in Hyprland, so FastMind left it alone: pick another key here.</p>`);
+      for (const problem of hypr.problems || []) parts.push(`<p class="bad">${esc(problem)}</p>`);
+      if (hypr.active) parts.push(`<p>${icon("check")} Bound in Hyprland while FastMind runs. Nothing is written to your Hyprland config.</p>`);
     }
   } else if (status?.how === "portal") {
     const keys = (status.bound || []).map((b) => `${esc(b.id)}: ${esc(b.trigger || "not set yet")}`).join(" · ");
@@ -977,24 +978,19 @@ async function loadHotkeyStatus(status) {
   } else if (status?.how === "none") {
     parts.push(`<p>This desktop has no global shortcuts service, so FastMind can't set the keys itself. Bind a key in your desktop's settings to run ${command}.</p>`);
   }
-  if (status?.problem) parts.push(`<p class="bad">${esc(status.problem)}</p>`);
   if (parts.length && status?.how !== "native") parts.push(`<p class="muted">Any key binding can also run ${command}.</p>`);
   note.innerHTML = parts.join("");
   note.hidden = !parts.length;
 }
 
+$("#settings-form").bind_in_hyprland.addEventListener("change", () => $("#settings-form").requestSubmit());
+
 $("#hotkey-note").addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-hotkeys]");
+  const button = event.target.closest('button[data-hotkeys="configure"]');
   if (!button) return;
   button.disabled = true;
   try {
-    const what = button.dataset.hotkeys;
-    if (what === "configure") await tauri.core.invoke("hotkeys_configure");
-    else {
-      const status = await tauri.core.invoke("hotkeys_setup", { install: what === "install" });
-      await loadHotkeyStatus(status);
-      toast(what === "install" ? "The hotkeys are set up in Hyprland." : "Removed FastMind's hotkeys from Hyprland.");
-    }
+    await tauri.core.invoke("hotkeys_configure");
   } catch (error) {
     toast(String(error.message || error), true);
   } finally {
@@ -1011,6 +1007,7 @@ async function loadSettings() {
     form.inbox.value = settings.inbox;
     form.hotkey_capture.value = settings.hotkeys.capture;
     form.hotkey_remember.value = settings.hotkeys.remember;
+    form.bind_in_hyprland.checked = settings.hotkeys.bind_in_hyprland !== false;
     showKeys();
     loadHotkeyStatus();
     form.autostart.checked = !!settings.autostart;
@@ -1054,7 +1051,11 @@ $("#settings-form").addEventListener("submit", async (event) => {
   const s = structuredClone(form._settings);
   s.notebook = form.notebook.value.trim() || null;
   s.inbox = form.inbox.value.trim() || "inbox";
-  s.hotkeys = { capture: form.hotkey_capture.value.trim(), remember: form.hotkey_remember.value.trim() };
+  s.hotkeys = {
+    capture: form.hotkey_capture.value.trim(),
+    remember: form.hotkey_remember.value.trim(),
+    bind_in_hyprland: form.bind_in_hyprland.checked,
+  };
   s.autostart = form.autostart.checked;
   Object.assign(s.dream, {
     nightly: form.nightly.checked,

@@ -31,27 +31,19 @@ static SESSION: tokio::sync::Mutex<Option<ashpd::desktop::Session<GlobalShortcut
     tokio::sync::Mutex::const_new(None);
 
 /// Asks the desktop for FastMind's hotkeys and listens for them. `keys` holds
-/// (id, accelerator) pairs, ids being "capture" and "remember".
-pub fn bind(app: AppHandle, keys: Vec<(&'static str, String)>) {
+/// (id, accelerator) pairs, ids being "capture" and "remember". On Hyprland, which leaves the
+/// keys to the user, FastMind also binds them itself unless `bind_in_hyprland` is off.
+pub fn bind(app: AppHandle, keys: Vec<(&'static str, String)>, bind_in_hyprland: bool) {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn(async move {
         let status = match bind_portal(&app, generation, &keys).await {
             Ok((bound, can_configure)) => {
-                // Once FastMind's block is in Hyprland's config, it follows the keys in Settings.
-                let mut problem = None;
-                if let Some(config) = crate::hyprland::Config::find()
-                    && config.installed()
-                    && let Err(error) = config.write(Some(&keys))
-                {
-                    eprintln!("{error}");
-                    problem = Some(error);
-                }
+                let hyprland = crate::hyprland::running();
                 json!({
                     "how": "portal",
                     "bound": bound,
-                    "can_configure": can_configure && crate::hyprland::Config::find().is_none(),
-                    "hyprland": crate::hyprland::status(&keys),
-                    "problem": problem,
+                    "can_configure": can_configure && !hyprland,
+                    "hyprland": hyprland_binds(&keys, hyprland, bind_in_hyprland),
                 })
             }
             Err(error) => {
@@ -67,6 +59,18 @@ pub fn bind(app: AppHandle, keys: Vec<(&'static str, String)>) {
 
 /// Binds the keys, returning what the desktop bound and whether it can show its own dialog for
 /// changing them (portal version 2).
+/// Binds the keys in Hyprland (or takes FastMind's binds back), for Settings to show.
+fn hyprland_binds(keys: &[(&'static str, String)], hyprland: bool, wanted: bool) -> Value {
+    if !hyprland {
+        Value::Null
+    } else if wanted {
+        crate::hyprland::apply(keys)
+    } else {
+        crate::hyprland::clear();
+        json!({ "active": false, "off": true })
+    }
+}
+
 async fn bind_portal(
     app: &AppHandle,
     generation: u64,

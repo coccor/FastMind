@@ -28,12 +28,12 @@ To change a key, click it in Settings › Hotkeys and press the new one (Esc can
 Wayland doesn't let an app take keys for the whole desktop, so there FastMind asks the desktop's
 global shortcuts service (the XDG portal) for them, and Settings › Hotkeys says how that went:
 
-- **Hyprland** registers FastMind's shortcuts but leaves the keys to its config. **Set up the
-  hotkeys** adds them to `~/.config/hypr/hyprland.lua` (or `hyprland.conf` before Hyprland 0.56)
-  in a block FastMind marks and owns, keeps a copy of the file as it was
-  (`hyprland.lua.before-fastmind`) and reloads Hyprland. From then on, changing a key in Settings
-  updates the block; **Remove from Hyprland** takes it out. Settings warns when a key is already
-  bound in Hyprland.
+- **Hyprland** registers FastMind's shortcuts but leaves the keys to its config, so FastMind binds
+  them itself, live over Hyprland's IPC, while it runs: again after every config reload, and
+  gone when it quits. Nothing is written to your config. Keys you already bound in Hyprland are
+  left alone and flagged in Settings. To bind the keys yourself instead, switch off **Bind these
+  keys in Hyprland while FastMind runs** and use `hl.dsp.global("dev.coccor.fastmind:capture")`
+  (and `:remember`) in your config.
 - **KDE, GNOME**: the desktop may ask you to confirm the keys. Where it can, **Change in the
   desktop's settings…** opens its own dialog for them.
 - **Anywhere else**, bind a key in your desktop to run `fastmind-desktop --capture` (or

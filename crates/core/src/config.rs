@@ -36,6 +36,9 @@ pub struct Settings {
 pub struct Hotkeys {
     pub capture: String,
     pub remember: String,
+    /// On Hyprland, which leaves global shortcuts' keys to the user, FastMind binds them itself
+    /// while it runs. Off for people who bind them in their own config.
+    pub bind_in_hyprland: bool,
 }
 
 impl Hotkeys {
@@ -113,6 +116,7 @@ impl Default for Hotkeys {
         Self {
             capture: "CommandOrControl+Alt+Space".into(),
             remember: "CommandOrControl+Alt+R".into(),
+            bind_in_hyprland: true,
         }
     }
 }

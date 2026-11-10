@@ -54,38 +54,6 @@ fn hotkey_list(settings: &Settings) -> Vec<(&'static str, String)> {
     .collect()
 }
 
-/// "Set up the hotkeys" (`install`) or "Remove" in Settings, where the desktop leaves the keys
-/// to its config: writes FastMind's block into Hyprland's config, or takes it out.
-#[tauri::command]
-async fn hotkeys_setup(app: AppHandle, install: bool) -> Result<Value, String> {
-    #[cfg(target_os = "linux")]
-    {
-        let keys = hotkey_list(&app.state::<Core>().0.settings());
-        let status = tauri::async_runtime::spawn_blocking(move || {
-            let config = hyprland::Config::find().ok_or("this isn't Hyprland")?;
-            config.write(install.then_some(keys.as_slice()))?;
-            Ok::<_, String>(hyprland::status(&keys))
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-        let mut current = app
-            .state::<HotkeyStatus>()
-            .0
-            .lock()
-            .expect("hotkey status lock")
-            .clone();
-        current["hyprland"] = status;
-        current["problem"] = Value::Null;
-        set_hotkey_status(&app, current.clone());
-        Ok(current)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (app, install);
-        Err("only needed on Linux".into())
-    }
-}
-
 /// "Change in the desktop's settings…": the desktop's own dialog for FastMind's shortcuts.
 #[tauri::command]
 async fn hotkeys_configure() -> Result<(), String> {
@@ -413,7 +381,11 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) {
     let _ = shortcuts.unregister_all();
     #[cfg(target_os = "linux")]
     if wayland_keys::in_wayland_session() {
-        wayland_keys::bind(app.clone(), hotkey_list(settings));
+        wayland_keys::bind(
+            app.clone(),
+            hotkey_list(settings),
+            settings.hotkeys.bind_in_hyprland,
+        );
         return;
     }
     let mut active = (None, None);
@@ -489,7 +461,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             call,
             hotkey_status,
-            hotkeys_setup,
             hotkeys_configure,
             open_path,
             hide_capture,
@@ -586,6 +557,22 @@ fn main() {
                 .build(app)?;
 
             register_hotkeys(&handle, &settings);
+            // A Hyprland config reload drops the keys FastMind bound: bind them again.
+            #[cfg(target_os = "linux")]
+            if hyprland::running() {
+                let app = handle.clone();
+                hyprland::watch_reloads(move || {
+                    let settings = app.state::<Core>().0.settings();
+                    if !settings.hotkeys.bind_in_hyprland {
+                        return;
+                    }
+                    let binds = hyprland::apply(&hotkey_list(&settings));
+                    let state = app.state::<HotkeyStatus>();
+                    let mut status = state.0.lock().expect("hotkey status lock").clone();
+                    status["hyprland"] = binds;
+                    set_hotkey_status(&app, status);
+                });
+            }
             // Reading a large notebook takes a moment: do it off the startup path, so the tray
             // and hotkeys are there at once and the first search is instant.
             let warm = handle.clone();
@@ -603,8 +590,17 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("FastMind failed to start");
+        .build(tauri::generate_context!())
+        .expect("FastMind failed to start")
+        .run(|_app, event| {
+            // The keys FastMind bound in Hyprland go with it.
+            #[cfg(target_os = "linux")]
+            if let tauri::RunEvent::Exit = event {
+                hyprland::clear();
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = event;
+        });
 }
 
 #[cfg(test)]
