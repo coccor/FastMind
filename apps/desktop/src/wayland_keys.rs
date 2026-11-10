@@ -235,11 +235,61 @@ pub fn split(accelerator: &str) -> Option<(Vec<&'static str>, String)> {
         match modifier {
             Some(m) if !modifiers.contains(&m) => modifiers.push(m),
             Some(_) => {}
-            None if part.is_empty() || key.is_some() => return None,
+            None if !known_key(part) || key.is_some() => return None,
             None => key = Some(part.to_owned()),
         }
     }
     Some((modifiers, key?))
+}
+
+/// The keys FastMind takes in a hotkey: a letter or digit, F1 to F24, or one of the named keys
+/// `keysym` knows. Anything else is refused, since hotkeys end up in other programs' config
+/// (Hyprland's), where a stray quote would be code.
+const NAMED_KEYS: &[&str] = &[
+    "space",
+    "enter",
+    "return",
+    "esc",
+    "escape",
+    "tab",
+    "backspace",
+    "delete",
+    "del",
+    "insert",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+    "up",
+    "arrowup",
+    "down",
+    "arrowdown",
+    "left",
+    "arrowleft",
+    "right",
+    "arrowright",
+    "minus",
+    "equal",
+    "comma",
+    "period",
+    "slash",
+    "semicolon",
+    "quote",
+    "bracketleft",
+    "bracketright",
+    "backslash",
+    "backquote",
+];
+
+fn known_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    let function_key = lower
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n));
+    (key.len() == 1 && key.chars().all(|c| c.is_ascii_alphanumeric()))
+        || function_key
+        || NAMED_KEYS.contains(&lower.as_str())
 }
 
 /// An accelerator as the XDG shortcuts spec writes triggers: "CTRL+ALT+space".
@@ -312,6 +362,9 @@ mod tests {
         );
         assert_eq!(xdg_trigger("Ctrl+Alt"), None);
         assert_eq!(xdg_trigger("Ctrl+A+B"), None);
+        assert_eq!(xdg_trigger("Ctrl+F25"), None);
+        assert_eq!(xdg_trigger("Ctrl+Alt+X\"))os.execute(\"id\")--"), None);
+        assert_eq!(xdg_trigger("Ctrl+Alt+Nope"), None);
     }
 
     #[test]

@@ -635,6 +635,7 @@ impl App {
             }
             "settings_set" => {
                 let settings: Settings = arg(&args, "settings")?;
+                settings.hotkeys.check().map_err(Error::msg)?;
                 self.replace_settings(settings)?;
                 json!({ "ok": true })
             }

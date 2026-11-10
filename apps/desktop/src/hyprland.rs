@@ -314,6 +314,18 @@ mod tests {
     }
 
     #[test]
+    fn nothing_but_known_keys_reaches_the_config() {
+        for bad in [
+            "Ctrl+Alt+X\")) os.execute(\"touch /tmp/pwned\") --",
+            "Ctrl+Alt+SPACE, exec, rm",
+            "Ctrl+Alt+Space\nexec-once = x",
+        ] {
+            assert_eq!(line(true, "capture", bad), None, "{bad:?}");
+            assert_eq!(line(false, "capture", bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn keys_use_xkb_names() {
         assert_eq!(
             line(false, "capture", "Ctrl+Comma").as_deref(),
