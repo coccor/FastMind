@@ -117,8 +117,10 @@ async fn call(
             | "inbox_keep"
             | "demo_create"
             | "settings_set"
+            | "notebook_switch"
     );
     let from_capture_window = name == "capture";
+    let switched = name == "notebook_switch";
     let settings_changed = name == "settings_set";
     let result = tauri::async_runtime::spawn_blocking(move || core.call(&name, args))
         .await
@@ -127,7 +129,7 @@ async fn call(
     if result.is_ok() && changes {
         // The other window refreshes; the capture window's save shows up in the main one.
         let _ = app.emit("changed", ());
-        if from_capture_window {
+        if from_capture_window || switched {
             update_tray(&app);
         }
         if settings_changed {
