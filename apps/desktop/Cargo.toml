@@ -29,6 +29,10 @@ opener = "0.7"
 ashpd = { version = "0.14", default-features = false, features = ["tokio", "global_shortcuts"] }
 futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false, features = ["sync"] }
+# Tauri's Linux tray (libappindicator) only shows a menu: a left click never reaches the app.
+# The ksni backend speaks StatusNotifierItem directly, so a click opens FastMind as elsewhere.
+# Not used in code: enabling the feature here switches the tray-icon crate Tauri builds on.
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 
 [dev-dependencies]
 tempfile.workspace = true
