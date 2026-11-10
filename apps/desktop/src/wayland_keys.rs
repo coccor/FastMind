@@ -247,29 +247,51 @@ fn keysym(key: &str) -> String {
     }
 }
 
-/// On Hyprland the portal registers the shortcuts but leaves the keys to the user: these are the
-/// `bind` lines for hyprland.conf that give them the keys from Settings.
+/// On Hyprland the portal registers the shortcuts but leaves the keys to the user: the lines
+/// that give them the keys from Settings, for the config Hyprland reads (Lua since 0.56, where
+/// `hyprland.lua` exists, else `hyprland.conf`).
 fn hyprland_lines(keys: &[(&'static str, String)]) -> Value {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
         return Value::Null;
     }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")))
+        .map(|dir| dir.join("hypr"));
+    let lua = config
+        .as_ref()
+        .is_some_and(|dir| dir.join("hyprland.lua").exists());
     let lines: Vec<String> = keys
         .iter()
-        .filter_map(|(id, accelerator)| {
-            let (modifiers, key) = split(accelerator)?;
-            let modifiers: Vec<&str> = modifiers
-                .iter()
-                .map(|m| if *m == "LOGO" { "SUPER" } else { m })
-                .collect();
-            Some(format!(
-                "bind = {}, {}, global, {}:{id}",
-                modifiers.join(" "),
-                key.to_ascii_uppercase(),
-                APP_ID
-            ))
-        })
+        .filter_map(|(id, accelerator)| hyprland_line(lua, id, accelerator))
         .collect();
-    json!(lines)
+    json!({
+        "file": if lua { "~/.config/hypr/hyprland.lua" } else { "~/.config/hypr/hyprland.conf" },
+        "lines": lines,
+    })
+}
+
+fn hyprland_line(lua: bool, id: &str, accelerator: &str) -> Option<String> {
+    let (modifiers, key) = split(accelerator)?;
+    let modifiers: Vec<&str> = modifiers
+        .iter()
+        .map(|m| if *m == "LOGO" { "SUPER" } else { m })
+        .collect();
+    let key = key.to_ascii_uppercase();
+    Some(if lua {
+        let mut chord = modifiers;
+        chord.push(&key);
+        format!(
+            "hl.bind(\"{}\", hl.dsp.global(\"{APP_ID}:{id}\"))",
+            chord.join(" + ")
+        )
+    } else {
+        format!(
+            "bind = {}, {key}, global, {APP_ID}:{id}",
+            modifiers.join(" ")
+        )
+    })
 }
 
 #[cfg(test)]
@@ -308,9 +330,14 @@ mod tests {
     }
 
     #[test]
-    fn hyprland_binds_use_its_own_names() {
-        let (modifiers, key) = split("CommandOrControl+Alt+Space").unwrap();
-        assert_eq!(modifiers, ["CTRL", "ALT"]);
-        assert_eq!(key, "Space");
+    fn hyprland_lines_fit_either_config() {
+        assert_eq!(
+            hyprland_line(false, "capture", "CommandOrControl+Alt+Space").as_deref(),
+            Some("bind = CTRL ALT, SPACE, global, dev.coccor.fastmind:capture")
+        );
+        assert_eq!(
+            hyprland_line(true, "remember", "Super+Shift+R").as_deref(),
+            Some(r#"hl.bind("SUPER + SHIFT + R", hl.dsp.global("dev.coccor.fastmind:remember"))"#)
+        );
     }
 }

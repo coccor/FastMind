@@ -29,7 +29,15 @@ global shortcuts service (the XDG portal) for them, and Settings › Hotkeys say
 - **KDE, GNOME**: the desktop may ask you to confirm the keys; change them later in its keyboard
   settings.
 - **Hyprland** registers FastMind's shortcuts but leaves the keys to you. Settings shows the lines
-  to add to `~/.config/hypr/hyprland.conf`, for the default keys:
+  to add, for the config Hyprland reads. For the default keys, in `~/.config/hypr/hyprland.lua`
+  (Hyprland 0.56 and later):
+
+  ```lua
+  hl.bind("CTRL + ALT + SPACE", hl.dsp.global("dev.coccor.fastmind:capture"))
+  hl.bind("CTRL + ALT + R", hl.dsp.global("dev.coccor.fastmind:remember"))
+  ```
+
+  or in `~/.config/hypr/hyprland.conf`:
 
   ```
   bind = CTRL ALT, SPACE, global, dev.coccor.fastmind:capture

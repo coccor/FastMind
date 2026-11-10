@@ -873,9 +873,9 @@ async function loadHotkeyStatus() {
   if (status?.how === "native" && status.problems?.length) {
     html = status.problems.map((p) => `<p class="bad">${esc(p)}</p>`).join("");
   } else if (status?.how === "portal") {
-    const lines = status.hyprland || [];
+    const lines = status.hyprland?.lines || [];
     if (lines.length) {
-      html = `<p>On Wayland your desktop owns global keys. FastMind registered its two shortcuts with Hyprland; to give them these keys, add to <code>~/.config/hypr/hyprland.conf</code>:</p>
+      html = `<p>On Wayland your desktop owns global keys. FastMind registered its two shortcuts with Hyprland; to give them these keys, add to <code>${esc(status.hyprland.file)}</code>:</p>
         <code class="block">${lines.map(esc).join("\n")}</code>`;
     } else {
       const keys = (status.bound || []).map((b) => `${esc(b.id)}: ${esc(b.trigger || "not set yet")}`).join(" · ");
