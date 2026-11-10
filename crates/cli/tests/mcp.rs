@@ -33,8 +33,10 @@ fn an_agent_can_search_and_save_findings() {
         json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_notes", "arguments": {"query": "ledger batch lag"}}}),
-        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "save_finding", "arguments": {"title": "Index posted_at to fix the ledger lag", "body": "Added migration 42. password=hunter22"}}}),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "save_finding", "arguments": {"title": "Index posted_at to fix the ledger lag", "summary": "The nightly batch lagged until entries.posted_at was indexed.", "kind": "finding", "body": "Added migration 42. password=hunter22"}}}),
         json!({"jsonrpc": "2.0", "id": 5, "method": "nope"}),
+        json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/list"}),
+        json!({"jsonrpc": "2.0", "id": 7, "method": "prompts/get", "params": {"name": "note", "arguments": {"focus": "the ledger index"}}}),
     ];
     {
         let stdin = child.stdin.as_mut().unwrap();
@@ -51,7 +53,7 @@ fn an_agent_can_search_and_save_findings() {
         .collect();
     assert_eq!(
         replies.len(),
-        5,
+        7,
         "one reply per request, none for the notification"
     );
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "fastmind");
@@ -72,5 +74,29 @@ fn an_agent_can_search_and_save_findings() {
     assert!(
         saved.contains("tags: [agent]") && !saved.contains("hunter22"),
         "{saved}"
+    );
+    assert!(
+        saved.contains("type: finding") && saved.contains("kind: finding"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains("summary: The nightly batch lagged until entries.posted_at was indexed."),
+        "{saved}"
+    );
+
+    // The note prompt: Claude Code's /mcp__fastmind__note.
+    assert_eq!(replies[0]["result"]["capabilities"]["prompts"], json!({}));
+    assert_eq!(replies[5]["result"]["prompts"][0]["name"], "note");
+    let prompt = replies[6]["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        prompt.contains("save_finding") && prompt.contains("search_notes"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Focus the note on: the ledger index"));
+    assert!(
+        prompt.contains("# Write up an AI coding session"),
+        "the notebook's ai-session skill is in it"
     );
 }

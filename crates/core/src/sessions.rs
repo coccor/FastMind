@@ -607,7 +607,8 @@ pub fn note_text(session: &Session, distilled: Option<&Distilled>) -> String {
         }
         body.push('\n');
     }
-    if !session.commands.is_empty() {
+    // The write-up keeps the commands that mattered; the raw list is only for notes without one.
+    if distilled.is_none() && !session.commands.is_empty() {
         body.push_str("## Commands\n\n```sh\n");
         for command in session
             .commands
@@ -635,11 +636,14 @@ pub struct Distilled {
     pub title: String,
     pub summary: String,
     pub body: String,
+    /// The model found nothing worth keeping: no note is written.
+    pub skip: bool,
 }
 
 /// With a model: the session as a finding someone can use later.
 /// The answer shape the ai-session skill's reply is read in.
-pub const SESSION_CONTRACT: &str = "Reply in this exact shape, and nothing else:\n\
+pub const SESSION_CONTRACT: &str = "When the session holds nothing worth keeping, reply with the single word SKIP. \
+Otherwise reply in this exact shape, and nothing else:\n\
 TITLE: the title\n\
 SUMMARY: the summary\n\
 BODY:\n\
@@ -672,6 +676,18 @@ pub fn distill(model: &Model, session: &Session, system: &str) -> Result<Distill
             material.replace("</", "<\\/")
         ),
     )?;
+    if reply
+        .trim()
+        .trim_matches(['.', '*', '`'])
+        .eq_ignore_ascii_case("skip")
+    {
+        return Ok(Distilled {
+            title: String::new(),
+            summary: String::new(),
+            body: String::new(),
+            skip: true,
+        });
+    }
     let title = model::field(&reply, "title")
         .ok_or_else(|| crate::Error::msg("the model gave no title"))?;
     let summary = model::field(&reply, "summary").unwrap_or_default();
@@ -683,6 +699,7 @@ pub fn distill(model: &Model, session: &Session, system: &str) -> Result<Distill
         title: fsx::safe_stem(&title),
         summary,
         body,
+        skip: false,
     })
 }
 
@@ -736,12 +753,69 @@ pub fn import(
     now: DateTime<Local>,
     preferences: &str,
 ) -> Result<ImportReport> {
+    import_these(
+        nb,
+        settings,
+        model,
+        model_budget,
+        now,
+        preferences,
+        discover(settings),
+        false,
+    )
+}
+
+/// Imports the one transcript at `path` now, without waiting for it to go quiet: its session
+/// just ended (Claude Code's SessionEnd hook).
+pub fn import_one(
+    nb: &Notebook,
+    settings: &AiSettings,
+    model: Option<&Model>,
+    now: DateTime<Local>,
+    preferences: &str,
+    path: &Path,
+) -> Result<ImportReport> {
+    let meta = fs::metadata(path)
+        .map_err(|_| crate::Error::msg(format!("no transcript at {}", path.display())))?;
+    let source = if path.components().any(|c| c.as_os_str() == ".codex") {
+        "codex"
+    } else {
+        "claude_code"
+    };
+    let transcript = Transcript {
+        source,
+        path: path.to_path_buf(),
+        size: meta.len(),
+        modified: meta.modified().map(DateTime::from).unwrap_or(now),
+    };
+    import_these(
+        nb,
+        settings,
+        model,
+        1,
+        now,
+        preferences,
+        vec![transcript],
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_these(
+    nb: &Notebook,
+    settings: &AiSettings,
+    model: Option<&Model>,
+    model_budget: usize,
+    now: DateTime<Local>,
+    preferences: &str,
+    transcripts: Vec<Transcript>,
+    ended: bool,
+) -> Result<ImportReport> {
     let system = crate::skills::system(Some(nb), "ai-session", preferences, SESSION_CONTRACT);
     let mut state: State = fs::read(state_file(nb))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
-    let transcripts = discover(settings);
     let mut report = ImportReport {
         found: transcripts.len(),
         ..Default::default()
@@ -756,12 +830,15 @@ pub fn import(
         let quiet = (now - transcript.modified).num_minutes();
         let too_old =
             (now - transcript.modified).num_days() > settings.since_days && known.is_none();
-        if quiet < settings.quiet_minutes || too_old {
+        if (!ended && quiet < settings.quiet_minutes) || too_old {
             report.skipped += 1;
             continue;
         }
         let Some(session) = read(&transcript) else {
             report.skipped += 1;
+            if ended {
+                report.notes.push("no conversation in it".into());
+            }
             continue;
         };
         let throwaway = is_temp_folder(&session.cwd) && !settings.include_automated;
@@ -770,6 +847,18 @@ pub fn import(
             || throwaway
         {
             report.skipped += 1;
+            if ended {
+                report.notes.push(
+                    if throwaway {
+                        "run in a temporary folder"
+                    } else if session.is_automated() {
+                        "run by a script, not a person"
+                    } else {
+                        "too short to note"
+                    }
+                    .into(),
+                );
+            }
             continue;
         }
         // The note FastMind wrote before, if the user hasn't edited it since.
@@ -806,6 +895,22 @@ pub fn import(
             }
             _ => None,
         };
+        if distilled.as_ref().is_some_and(|d| d.skip) {
+            // Nothing worth keeping: remembered, so it isn't asked again unless the session
+            // goes on. A note written from it before stays as it is.
+            report.skipped += 1;
+            report
+                .notes
+                .push(format!("{}: nothing worth keeping", session.title));
+            state.transcripts.insert(
+                key,
+                Imported {
+                    size: transcript.size,
+                    ..known.unwrap_or_default()
+                },
+            );
+            continue;
+        }
         let text = note_text(&session, distilled.as_ref());
         let rel = match previous {
             Some(previous) => previous.note.clone(),

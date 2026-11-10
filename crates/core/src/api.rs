@@ -287,6 +287,21 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "ai_import_session" => {
+                let path: PathBuf = arg(&args, "path")?;
+                let settings = self.settings();
+                let model = self.model();
+                let report = crate::sessions::import_one(
+                    &nb,
+                    &settings.ai,
+                    model.as_ref(),
+                    now,
+                    &settings.writing.instructions,
+                    &path,
+                )?;
+                self.invalidate();
+                json!(report)
+            }
             "skills_list" => json!(crate::skills::list(Some(&nb))),
             "skill_get" => {
                 let name: String = arg(&args, "name")?;
@@ -651,7 +666,8 @@ impl App {
                 };
                 json!({
                     "command": command,
-                    "claude_code": format!("claude mcp add --scope user fastmind -- {quoted} mcp"),
+                    // The MCP server (with /mcp__fastmind__note) and the SessionEnd hook, in one go.
+                    "claude_code": format!("{quoted} agent install"),
                     "codex": format!("[mcp_servers.fastmind]\ncommand = {}\nargs = [\"mcp\"]", serde_json::to_string(&command)?),
                 })
             }

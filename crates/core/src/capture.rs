@@ -32,6 +32,14 @@ pub struct Capture {
     /// Already written (an agent's finding, or saved with `--raw`): kept as it is.
     #[serde(default)]
     pub as_written: bool,
+    /// For a note written elsewhere (an agent's): what it is and its one-sentence summary.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Its `type:`; `capture` when not given (an agent's note is a `finding`).
+    #[serde(default)]
+    pub note_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -233,11 +241,37 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
 
     let mut front = vec![
         "---".to_owned(),
-        "type: capture".to_owned(),
+        format!(
+            "type: {}",
+            capture
+                .note_type
+                .as_deref()
+                .filter(|t| !t.trim().is_empty() && !t.contains(['\n', ':']))
+                .unwrap_or("capture")
+        ),
         format!("captured: {}", now.format("%Y-%m-%dT%H:%M")),
         format!("capture_id: {capture_id}"),
         "status: inbox".to_owned(),
     ];
+    if let Some(kind) = capture
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        front.push(format!("kind: {}", quote(kind)));
+    }
+    if let Some(summary) = capture
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        front.push(format!(
+            "summary: {}",
+            quote(&summary.replace(['\n', '\r'], " "))
+        ));
+    }
     if let Some(url) = &url {
         front.push(format!("source_url: {}", quote(url)));
     }

@@ -41,7 +41,7 @@ what they meant.
   `decision`, `finding`, `meeting`, `reference`, `how-to`, `bookmark`, `journal`, `question`,
   `person` or `other`.
 - **title**: what it's about in the user's terms, specific enough to tell apart from similar
-  notes, at most about ten words. State a finding or decision as a claim ("Autovacuum falls
+  notes, at most about eight words; the details belong in the summary. State a finding or decision as a claim ("Autovacuum falls
   behind on orders at 40M rows"), not a topic ("Autovacuum"). A bookmark's title says what the
   page is. No dates, no "Note about", no trailing period.
 - **summary**: one sentence a reader could stop after. It carries the point; it doesn't restate

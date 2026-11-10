@@ -134,15 +134,27 @@ tray, where it dreams at night.
 
 ## Coding agents
 
-Settings › **Connect your coding agents** shows the exact command for this computer. For
-example, for Claude Code:
+For Claude Code, one command sets everything up (Settings › **Connect your coding agents**
+shows it with this computer's path):
 
 ```sh
-claude mcp add --scope user fastmind -- fastmind mcp
+fastmind agent install      # agent status | agent uninstall
 ```
 
-Agents get `search_notes`, `read_note`, `ask_notebook` and `save_finding`. Their findings land
-as a fresh memory tagged `agent`, with secrets removed.
+- **`/mcp__fastmind__note`** in any Claude Code session writes up the work, following the
+  notebook's `ai-session` skill, and saves it. Add words after it to focus the note:
+  `/mcp__fastmind__note the decision about the cache`.
+- **Every session is written up when it ends**, by a `SessionEnd` hook. The hook hands the
+  transcript to a background `fastmind import-session`, so quitting doesn't wait; sessions with
+  nothing worth keeping get no note. What happened is logged in `session-hook.log` beside the
+  settings file.
+- Agents can also `search_notes`, `read_note` and `ask_notebook` before they dig into
+  something, and `save_finding` (title, summary, body, kind, tags) whenever they learn
+  something. Findings land as fresh memories tagged `agent`, with secrets removed.
+
+`agent install` adds the MCP server for all your projects with `claude mcp add --scope user`
+and the hook to `~/.claude/settings.json` (keeping a `.fastmind-backup` copy). Codex users add
+the MCP server to `~/.codex/config.toml`; Settings shows the lines.
 
 ## The command line
 

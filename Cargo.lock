@@ -1021,6 +1021,7 @@ dependencies = [
 name = "fastmind-cli"
 version = "0.1.0"
 dependencies = [
+ "directories",
  "fastmind-core",
  "opener",
  "serde_json",

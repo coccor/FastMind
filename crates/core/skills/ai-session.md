@@ -20,10 +20,20 @@ will read months later without the conversation: what was learned or decided, no
 Leave out the back-and-forth, the agent's narration, pleasantries, and anything that only
 mattered during the session.
 
+## When there's nothing to keep
+
+Many sessions hold nothing worth a note: a question asked and abandoned, a request with no work
+done, a quick lookup, a session that only ran a command. Then write no note (your answer says
+how). A notebook full of empty session notes is worse than a missing one.
+
+Never suggest next steps, causes or fixes the session didn't reach. The note records what
+happened, not what could happen.
+
 ## Shape
 
-- **Title**: the finding stated as a claim, under twelve words: "Archive index per item stops
-  undo conflicts", not "Archive work". When nothing was found or decided, what was done.
+- **Title**: the finding as a short claim, at most eight words: "Per-item archive index fixes
+  undo", not "Archive work". The details belong in the summary. When nothing was found or
+  decided, what was done.
 - **Summary**: one sentence that answers the question on its own.
 - **Body**: Markdown with only the sections that apply: `## Problem`, `## What was found`,
   `## Decision`, `## What worked` (commands in fenced blocks, exactly as run), `## Watch out`.

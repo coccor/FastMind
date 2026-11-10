@@ -1,6 +1,7 @@
 //! `fastmind`: the notebook from a terminal or a script. Every command goes through the same
 //! command surface as the desktop app.
 
+mod agent;
 mod mcp;
 mod serve;
 
@@ -49,6 +50,11 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
   serve [--port N] [--ui DIR]
                           Serve the app's UI and API on localhost (for a browser)
   mcp                     Serve the notebook to coding agents (MCP over stdio)
+  agent install [--no-hook] | uninstall | status
+                          Connect FastMind to Claude Code: the MCP server (with the
+                          /mcp__fastmind__note command) and a SessionEnd hook that
+                          writes up each session when it ends
+  import-session FILE     Write up one Claude Code or Codex transcript now
   settings                Show where settings live and what they are
 
 Options:
@@ -462,6 +468,92 @@ fastmind skills show NAME | edit NAME | reset NAME"
             );
         }
         "mcp" => mcp::serve(app).map_err(|e| Failure::Failed(e.to_string()))?,
+        "agent" | "agents" => {
+            let action = rest.first().map(String::as_str).unwrap_or("status");
+            let lines = match action {
+                "install" => agent::install(!rest.iter().any(|a| a == "--no-hook"))
+                    .map_err(Failure::Failed)?,
+                "uninstall" | "remove" => agent::uninstall().map_err(Failure::Failed)?,
+                "status" => agent::status(),
+                other => {
+                    return Err(usage(&format!(
+                        "unknown agent action \"{other}\": install, uninstall or status"
+                    )));
+                }
+            };
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        "hook" => match rest.first().map(String::as_str) {
+            // Claude Code runs this when a session ends; it must never fail the session.
+            Some("session-end") => {
+                let _ = agent::session_end();
+            }
+            _ => return Err(usage("hook session-end")),
+        },
+        "import-session" => {
+            let path = rest.join(" ");
+            if path.is_empty() {
+                return Err(usage("import-session needs a transcript file"));
+            }
+            let result = app.call("ai_import_session", json!({"path": path}));
+            // Run from the hook, nobody sees the terminal: say what happened in a log too.
+            let line = match &result {
+                Ok(report) => format!(
+                    "{} {path}: {} added, {} updated, {} skipped{}",
+                    chrono_now(),
+                    report["added"].as_array().map_or(0, Vec::len),
+                    report["updated"].as_array().map_or(0, Vec::len),
+                    report["skipped"],
+                    report["notes"]
+                        .as_array()
+                        .filter(|n| !n.is_empty())
+                        .map(|n| format!(
+                            " ({})",
+                            n.iter()
+                                .filter_map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        ))
+                        .unwrap_or_default()
+                ),
+                Err(error) => format!("{} {path}: {}", chrono_now(), error.0),
+            };
+            let log = agent::hook_log();
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)
+            {
+                let _ = std::io::Write::write_all(
+                    &mut file,
+                    format!(
+                        "{line}
+"
+                    )
+                    .as_bytes(),
+                );
+            }
+            let report = result?;
+            out(&report, &|v| {
+                for note in v["added"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .chain(v["updated"].as_array().into_iter().flatten())
+                {
+                    println!("Wrote {}", note.as_str().unwrap_or(&note.to_string()));
+                }
+                if v["added"].as_array().is_none_or(|a| a.is_empty())
+                    && v["updated"].as_array().is_none_or(|a| a.is_empty())
+                {
+                    println!(
+                        "Nothing to write for that session (too short, automated, or already noted)."
+                    );
+                }
+            });
+        }
         "serve" => {
             let port: u16 = take_flag(&mut rest, "--port")
                 .pop()
@@ -611,4 +703,9 @@ fn show_report(report: &Value) {
 
 fn human(bytes: u64) -> String {
     fastmind_core::dream::human_bytes(bytes)
+}
+
+fn chrono_now() -> String {
+    // Local time without pulling in chrono here: the core formats it.
+    fastmind_core::journal::new_id()
 }
