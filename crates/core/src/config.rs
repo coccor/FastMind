@@ -62,6 +62,9 @@ pub struct DreamSettings {
     pub fragment_words: usize,
     /// Kinds of proposal applied without asking (`pack`, `fix_link`, `archive`, `merge`, `topic`).
     pub auto_apply: Vec<String>,
+    /// New memories (captures still in the inbox) are settled into their home once they're
+    /// this many hours old.
+    pub settle_after_hours: i64,
     /// Most model requests one night may make.
     pub model_requests: usize,
     /// AI session notes nobody opened in this many days are proposed for the archive.
@@ -107,7 +110,9 @@ impl Default for DreamSettings {
             topic_similarity: 0.22,
             topic_min_notes: 3,
             fragment_words: 120,
-            auto_apply: vec!["pack".into()],
+            // Dream clears the inbox on its own: settling only moves notes, and History undoes it.
+            auto_apply: vec!["pack".into(), "settle".into()],
+            settle_after_hours: 6,
             model_requests: 20,
             ai_session_days: 90,
         }

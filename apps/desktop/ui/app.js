@@ -567,8 +567,8 @@ $("#inbox-list").addEventListener("keydown", (event) => {
 });
 
 // ---------- Dream ----------
-const KIND_ICON = { merge: "⧉", topic: "❖", archive: "▤", fix_link: "⛓", pack: "⇲" };
-const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive" };
+const KIND_ICON = { merge: "⧉", topic: "❖", archive: "▤", fix_link: "⛓", pack: "⇲", settle: "↳" };
+const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle new memories" };
 
 async function loadDream() {
   try {

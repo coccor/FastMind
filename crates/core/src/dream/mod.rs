@@ -30,6 +30,8 @@ pub enum Kind {
     Archive,
     FixLink,
     Pack,
+    /// New memories moved from the inbox to where they belong.
+    Settle,
 }
 
 impl Kind {
@@ -40,6 +42,7 @@ impl Kind {
             "archive" => Some(Kind::Archive),
             "fix_link" | "link" => Some(Kind::FixLink),
             "pack" => Some(Kind::Pack),
+            "settle" | "file" => Some(Kind::Settle),
             _ => None,
         }
     }
@@ -70,6 +73,28 @@ pub enum Plan {
         items: Vec<String>,
         journal: Vec<String>,
     },
+    Settle {
+        /// The folder the notes go into, or the home note they go beside.
+        folder: Option<String>,
+        home: Option<String>,
+        paths: Vec<String>,
+    },
+}
+
+/// Where the notebook keeps new captures and AI sessions: not places to settle notes into.
+#[derive(Clone, Debug)]
+pub struct Places {
+    pub inbox: String,
+    pub ai_folder: String,
+}
+
+impl Default for Places {
+    fn default() -> Self {
+        Self {
+            inbox: "inbox".into(),
+            ai_folder: "AI sessions".into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -202,6 +227,16 @@ const ATTACHMENT_EXT: [&str; 16] = [
 pub fn run(
     nb: &Notebook,
     settings: &DreamSettings,
+    model: Option<&Model>,
+    now: DateTime<Local>,
+) -> Result<Report> {
+    run_in(nb, settings, &Places::default(), model, now)
+}
+
+pub fn run_in(
+    nb: &Notebook,
+    settings: &DreamSettings,
+    places: &Places,
     model: Option<&Model>,
     now: DateTime<Local>,
 ) -> Result<Report> {
@@ -642,7 +677,143 @@ pub fn run(
         }
     }
 
-    // 5. Pack: old archived notes and old undo records go into one zip file.
+    // 5. Settle: new memories go where they belong, the way sleep consolidates the day. The
+    //    home the model suggested when it wrote the note comes first; else the folder (or
+    //    home note) holding the notes most like it, when at least two agree. A note with no
+    //    clear home stays new.
+    let busy: HashSet<String> = proposals
+        .iter()
+        .flat_map(|p| p.notes.iter().cloned())
+        .collect();
+    let settling: Vec<&Note> = notes
+        .iter()
+        .filter(|n| n.status() == "inbox" && !protected(n) && !busy.contains(&n.path))
+        .filter(|n| now - n.touched >= Duration::hours(settings.settle_after_hours))
+        .collect();
+    if !settling.is_empty() {
+        let search = crate::search::Index::build(&notes, Vec::new());
+        // (folder, home) and the notes going there, each with why.
+        type Place = (Option<String>, Option<String>);
+        let mut groups: Vec<(Place, Vec<(String, String)>)> = Vec::new();
+        for note in settling {
+            let suggested = note
+                .front
+                .text("suggested_home")
+                .map(str::trim)
+                .unwrap_or("");
+            let because = note
+                .front
+                .text("suggested_because")
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            let from_model = if let Some(name) = suggested
+                .strip_prefix("[[")
+                .and_then(|h| h.strip_suffix("]]"))
+            {
+                notes
+                    .iter()
+                    .find(|n| n.stem() == name && n.is_home())
+                    .map(|h| ((None, Some(h.path.clone())), because.clone()))
+            } else if !suggested.is_empty() {
+                let folder = suggested.trim_matches('/').to_owned();
+                nb.path(&folder)
+                    .ok()
+                    .filter(|p| p.is_dir())
+                    .map(|_| ((Some(folder), None), because.clone()))
+            } else {
+                None
+            };
+            let choice = from_model.or_else(|| {
+                let homes =
+                    crate::filing::suggest(&search, &note.path, &places.inbox, &places.ai_folder);
+                let best = homes.first()?;
+                if best.kind == "note" {
+                    Some((
+                        (None, Some(best.target.clone())),
+                        format!("it's most like notes linked from \"{}\"", best.label),
+                    ))
+                } else if best.because.len() >= 2 {
+                    Some((
+                        (Some(best.target.clone()), None),
+                        format!("beside {}", best.because.join(", ")),
+                    ))
+                } else {
+                    None
+                }
+            });
+            let Some((place, why)) = choice else { continue };
+            // Already there: nothing to move.
+            if place.0.as_deref() == Some(note.folder()) {
+                continue;
+            }
+            match groups.iter_mut().find(|(p, _)| *p == place) {
+                Some((_, members)) => members.push((note.path.clone(), why)),
+                None => groups.push((place, vec![(note.path.clone(), why)])),
+            }
+        }
+        for ((folder, home), members) in groups {
+            let titles: Vec<String> = members
+                .iter()
+                .filter_map(|(path, _)| notes.iter().find(|n| &n.path == path))
+                .map(|n| format!("\"{}\"", n.title))
+                .collect();
+            let place = match (&folder, &home) {
+                (_, Some(home)) => notes
+                    .iter()
+                    .find(|n| &n.path == home)
+                    .map_or(home.clone(), |h| format!("\"{}\"", h.title)),
+                (Some(folder), None) if folder.is_empty() => "the notebook root".into(),
+                (Some(folder), None) => format!("{folder}/"),
+                (None, None) => continue,
+            };
+            let count = members.len();
+            let reasons: Vec<String> = members
+                .iter()
+                .zip(&titles)
+                .map(|((_, why), title)| {
+                    if why.is_empty() {
+                        title.clone()
+                    } else {
+                        format!("{title}: {why}")
+                    }
+                })
+                .collect();
+            proposals.push(Proposal {
+                id: String::new(),
+                kind: Kind::Settle,
+                title: if count == 1 {
+                    format!("Settle {} in {place}", titles[0])
+                } else {
+                    format!("Settle {count} new memories in {place}")
+                },
+                reason: format!(
+                    "{}. {}",
+                    reasons.join("; "),
+                    if home.is_some() {
+                        "They move beside it and it links to them."
+                    } else {
+                        "They move into that folder; links to them follow."
+                    }
+                ),
+                notes: members.iter().map(|(p, _)| p.clone()).collect(),
+                notes_removed: 0,
+                bytes_freed: 0,
+                disk_freed: 0,
+                preview: None,
+                status: Status::Pending,
+                entry: None,
+                error: None,
+                plan: Plan::Settle {
+                    folder,
+                    home,
+                    paths: members.into_iter().map(|(p, _)| p).collect(),
+                },
+            });
+        }
+    }
+
+    // 6. Pack: old archived notes and old undo records go into one zip file.
     let index = Index::load(nb);
     let old_items: Vec<&archive::Item> = index
         .loose()
@@ -851,6 +1022,17 @@ fn summarize(before: &Totals, proposals: &[Proposal]) -> String {
     if count(Kind::Pack) > 0 {
         parts.push("an archive to pack".into());
     }
+    let settled: usize = proposals
+        .iter()
+        .filter(|p| p.kind == Kind::Settle)
+        .map(|p| p.notes.len())
+        .sum();
+    if settled > 0 {
+        parts.push(format!(
+            "{settled} new memor{} to settle",
+            if settled == 1 { "y" } else { "ies" }
+        ));
+    }
     let removed: usize = proposals.iter().map(|p| p.notes_removed).sum();
     let freed: i64 = proposals.iter().map(|p| p.bytes_freed).sum();
     let disk: i64 = proposals.iter().map(|p| p.disk_freed).sum();
@@ -1053,6 +1235,8 @@ fn execute(
     let mut index = Index::load(nb);
     let mut tx = Transaction::begin(nb, proposal.title.clone(), "dream")?;
     match &proposal.plan {
+        // Settling files each note in this same change, below.
+        Plan::Settle { .. } => {}
         Plan::Merge { keep, absorb } => {
             let mut all = vec![keep.clone()];
             all.extend(absorb.iter().cloned());
@@ -1173,6 +1357,32 @@ fn execute(
             for file in journal_files {
                 tx.remove(&file)?;
             }
+        }
+    }
+    if let Plan::Settle {
+        folder,
+        home,
+        paths,
+    } = &proposal.plan
+    {
+        if let Some(home) = home
+            && find(home).is_none()
+        {
+            return Err(Outcome::Outdated(format!("{home} is gone")));
+        }
+        let mut moved = 0;
+        for path in paths {
+            // Gone, or settled by hand since: nothing to do for it.
+            if find(path).is_none_or(|n| n.status() != "inbox") {
+                continue;
+            }
+            crate::filing::file_in(&mut tx, path, folder.as_deref(), home.as_deref())?;
+            moved += 1;
+        }
+        if moved == 0 {
+            return Err(Outcome::Outdated(
+                "those notes were settled or moved already".into(),
+            ));
         }
     }
     index.save(&mut tx)?;

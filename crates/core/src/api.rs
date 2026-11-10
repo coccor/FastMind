@@ -460,7 +460,16 @@ impl App {
                         now,
                     )?;
                 }
-                dream::run(&nb, &settings.dream, model.as_ref(), now)?;
+                dream::run_in(
+                    &nb,
+                    &settings.dream,
+                    &dream::Places {
+                        inbox: settings.inbox.clone(),
+                        ai_folder: settings.ai.folder.clone(),
+                    },
+                    model.as_ref(),
+                    now,
+                )?;
                 let auto = dream::auto_apply(&nb, &settings.dream, now)?;
                 self.invalidate();
                 let report = dream::latest(&nb);

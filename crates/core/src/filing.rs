@@ -106,6 +106,42 @@ pub fn folders(notes: &[crate::Note]) -> Vec<String> {
 /// Returns where the note is now.
 pub fn file(nb: &Notebook, path: &str, folder: Option<&str>, home: Option<&str>) -> Result<String> {
     let note = nb.read(path)?;
+    let label = match home {
+        Some(home) => nb
+            .read(home)
+            .map(|h| h.title)
+            .unwrap_or_else(|_| home.to_owned()),
+        None => folder.unwrap_or("").trim_matches(['/', '\\']).to_owned(),
+    };
+    let mut tx = Transaction::begin(
+        nb,
+        format!(
+            "File \"{}\" in {}",
+            note.title,
+            if label.is_empty() {
+                "the notebook root"
+            } else {
+                &label
+            }
+        ),
+        "inbox",
+    )?;
+    let target = file_in(&mut tx, path, folder, home)?;
+    tx.commit()?;
+    Ok(target)
+}
+
+/// Moves the note at `path` into `folder`, or beside the home note `home` with a link to it
+/// there, as part of `tx`. Links to the note follow it; its own links are kept working.
+pub fn file_in(
+    tx: &mut Transaction,
+    path: &str,
+    folder: Option<&str>,
+    home: Option<&str>,
+) -> Result<String> {
+    let nb = tx.notebook().clone();
+    let nb = &nb;
+    let note = nb.read(path)?;
     let notes = nb.notes();
     let (target_folder, home_note) = match (folder, home) {
         (_, Some(home)) => {
@@ -154,22 +190,6 @@ pub fn file(nb: &Notebook, path: &str, folder: Option<&str>, home: Option<&str>)
             text = frontmatter::body(&text).to_owned();
         }
     }
-    let label = home_note
-        .as_ref()
-        .map_or(target_folder.clone(), |h| h.title.clone());
-    let mut tx = Transaction::begin(
-        nb,
-        format!(
-            "File \"{}\" in {}",
-            note.title,
-            if label.is_empty() {
-                "the notebook root"
-            } else {
-                &label
-            }
-        ),
-        "inbox",
-    )?;
     if target != path {
         // The note's own Markdown links are relative to its folder: point them from the new one.
         let resolver = Resolver::new(&notes);
@@ -222,7 +242,6 @@ pub fn file(nb: &Notebook, path: &str, folder: Option<&str>, home: Option<&str>)
             tx.write(&home.path, text.as_bytes())?;
         }
     }
-    tx.commit()?;
     Ok(target)
 }
 
