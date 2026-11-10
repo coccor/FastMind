@@ -171,9 +171,13 @@
           </fieldset>
           <fieldset>
             <legend>Hotkeys</legend>
-            <label>Capture <input name="hotkey_capture"></label>
-            <label>Remember <input name="hotkey_remember"></label>
-            <p class="muted small">From anywhere on this computer. Saved changes apply at once.</p>
+            <div class="keyrow"><span>Capture</span><input type="hidden" name="hotkey_capture">
+              <button type="button" class="keyrec" data-for="hotkey_capture" title="Click, then press the keys"></button>
+              <button type="button" class="link keyclear" data-for="hotkey_capture">Clear</button></div>
+            <div class="keyrow"><span>Remember</span><input type="hidden" name="hotkey_remember">
+              <button type="button" class="keyrec" data-for="hotkey_remember" title="Click, then press the keys"></button>
+              <button type="button" class="link keyclear" data-for="hotkey_remember">Clear</button></div>
+            <p class="muted small">From anywhere on this computer. Click a key, then press the new one; it applies at once. Esc cancels.</p>
             <div id="hotkey-note" class="hotkey-note small" hidden></div>
             <label class="check"><input type="checkbox" name="autostart"> Start FastMind with the computer, in the tray</label>
           </fieldset>

@@ -29,3 +29,6 @@ opener = "0.7"
 ashpd = { version = "0.14", default-features = false, features = ["tokio", "global_shortcuts"] }
 futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+tempfile.workspace = true

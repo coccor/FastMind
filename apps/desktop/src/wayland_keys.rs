@@ -36,11 +36,24 @@ pub fn bind(app: AppHandle, keys: Vec<(&'static str, String)>) {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn(async move {
         let status = match bind_portal(&app, generation, &keys).await {
-            Ok(bound) => json!({
-                "how": "portal",
-                "bound": bound,
-                "hyprland": hyprland_lines(&keys),
-            }),
+            Ok((bound, can_configure)) => {
+                // Once FastMind's block is in Hyprland's config, it follows the keys in Settings.
+                let mut problem = None;
+                if let Some(config) = crate::hyprland::Config::find()
+                    && config.installed()
+                    && let Err(error) = config.write(Some(&keys))
+                {
+                    eprintln!("{error}");
+                    problem = Some(error);
+                }
+                json!({
+                    "how": "portal",
+                    "bound": bound,
+                    "can_configure": can_configure && crate::hyprland::Config::find().is_none(),
+                    "hyprland": crate::hyprland::status(&keys),
+                    "problem": problem,
+                })
+            }
             Err(error) => {
                 eprintln!("The desktop's global shortcuts service isn't available: {error}");
                 json!({ "how": "none", "detail": error.to_string() })
@@ -52,17 +65,19 @@ pub fn bind(app: AppHandle, keys: Vec<(&'static str, String)>) {
     });
 }
 
+/// Binds the keys, returning what the desktop bound and whether it can show its own dialog for
+/// changing them (portal version 2).
 async fn bind_portal(
     app: &AppHandle,
     generation: u64,
     keys: &[(&'static str, String)],
-) -> Result<Vec<Value>, ashpd::Error> {
+) -> Result<(Vec<Value>, bool), ashpd::Error> {
     let mut current = SESSION.lock().await;
     if let Some(old) = current.take() {
         let _ = old.close().await;
     }
     if keys.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     }
     register_app_id().await?;
     let portal = GlobalShortcuts::new().await?;
@@ -87,6 +102,7 @@ async fn bind_portal(
         .collect();
     *current = Some(session);
     drop(current);
+    let can_configure = portal.version() >= 2;
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -105,7 +121,20 @@ async fn bind_portal(
             });
         }
     });
-    Ok(bound)
+    Ok((bound, can_configure))
+}
+
+/// Opens the desktop's own dialog for changing FastMind's shortcuts (KDE, GNOME).
+pub async fn configure() -> Result<(), String> {
+    let current = SESSION.lock().await;
+    let session = current
+        .as_ref()
+        .ok_or("FastMind's shortcuts aren't registered with the desktop")?;
+    let portal = GlobalShortcuts::new().await.map_err(|e| e.to_string())?;
+    portal
+        .configure_shortcuts(session, None, Default::default())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Outside a sandbox the portal can't tell which app is asking, and refuses global shortcuts
@@ -191,7 +220,7 @@ fn describe(id: &str) -> &'static str {
 }
 
 /// The parts of an accelerator ("CommandOrControl+Alt+Space"): modifiers, then the key.
-fn split(accelerator: &str) -> Option<(Vec<&'static str>, String)> {
+pub fn split(accelerator: &str) -> Option<(Vec<&'static str>, String)> {
     let mut modifiers = Vec::new();
     let mut key = None;
     for part in accelerator.split('+').map(str::trim) {
@@ -223,7 +252,7 @@ pub fn xdg_trigger(accelerator: &str) -> Option<String> {
 }
 
 /// The xkb keysym name for a key as accelerators write it.
-fn keysym(key: &str) -> String {
+pub fn keysym(key: &str) -> String {
     let lower = key.to_ascii_lowercase();
     match lower.as_str() {
         "space" => "space".into(),
@@ -241,57 +270,21 @@ fn keysym(key: &str) -> String {
         "down" | "arrowdown" => "Down".into(),
         "left" | "arrowleft" => "Left".into(),
         "right" | "arrowright" => "Right".into(),
+        "minus" => "minus".into(),
+        "equal" => "equal".into(),
+        "comma" => "comma".into(),
+        "period" => "period".into(),
+        "slash" => "slash".into(),
+        "semicolon" => "semicolon".into(),
+        "quote" => "apostrophe".into(),
+        "bracketleft" => "bracketleft".into(),
+        "bracketright" => "bracketright".into(),
+        "backslash" => "backslash".into(),
+        "backquote" => "grave".into(),
         _ if key.chars().count() == 1 => lower,
         _ if lower.starts_with('f') && lower[1..].parse::<u8>().is_ok() => key.to_ascii_uppercase(),
         _ => key.to_owned(),
     }
-}
-
-/// On Hyprland the portal registers the shortcuts but leaves the keys to the user: the lines
-/// that give them the keys from Settings, for the config Hyprland reads (Lua since 0.56, where
-/// `hyprland.lua` exists, else `hyprland.conf`).
-fn hyprland_lines(keys: &[(&'static str, String)]) -> Value {
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
-        return Value::Null;
-    }
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")))
-        .map(|dir| dir.join("hypr"));
-    let lua = config
-        .as_ref()
-        .is_some_and(|dir| dir.join("hyprland.lua").exists());
-    let lines: Vec<String> = keys
-        .iter()
-        .filter_map(|(id, accelerator)| hyprland_line(lua, id, accelerator))
-        .collect();
-    json!({
-        "file": if lua { "~/.config/hypr/hyprland.lua" } else { "~/.config/hypr/hyprland.conf" },
-        "lines": lines,
-    })
-}
-
-fn hyprland_line(lua: bool, id: &str, accelerator: &str) -> Option<String> {
-    let (modifiers, key) = split(accelerator)?;
-    let modifiers: Vec<&str> = modifiers
-        .iter()
-        .map(|m| if *m == "LOGO" { "SUPER" } else { m })
-        .collect();
-    let key = key.to_ascii_uppercase();
-    Some(if lua {
-        let mut chord = modifiers;
-        chord.push(&key);
-        format!(
-            "hl.bind(\"{}\", hl.dsp.global(\"{APP_ID}:{id}\"))",
-            chord.join(" + ")
-        )
-    } else {
-        format!(
-            "bind = {}, {key}, global, {APP_ID}:{id}",
-            modifiers.join(" ")
-        )
-    })
 }
 
 #[cfg(test)]
@@ -313,6 +306,10 @@ mod tests {
             Some("LOGO+SHIFT+F5")
         );
         assert_eq!(xdg_trigger("Ctrl+Enter").as_deref(), Some("CTRL+Return"));
+        assert_eq!(
+            xdg_trigger("Ctrl+Alt+Comma").as_deref(),
+            Some("CTRL+ALT+comma")
+        );
         assert_eq!(xdg_trigger("Ctrl+Alt"), None);
         assert_eq!(xdg_trigger("Ctrl+A+B"), None);
     }
@@ -327,17 +324,5 @@ mod tests {
         ));
         assert!(entry.contains("NoDisplay=true\n"));
         assert!(entry.contains(GENERATED));
-    }
-
-    #[test]
-    fn hyprland_lines_fit_either_config() {
-        assert_eq!(
-            hyprland_line(false, "capture", "CommandOrControl+Alt+Space").as_deref(),
-            Some("bind = CTRL ALT, SPACE, global, dev.coccor.fastmind:capture")
-        );
-        assert_eq!(
-            hyprland_line(true, "remember", "Super+Shift+R").as_deref(),
-            Some(r#"hl.bind("SUPER + SHIFT + R", hl.dsp.global("dev.coccor.fastmind:remember"))"#)
-        );
     }
 }

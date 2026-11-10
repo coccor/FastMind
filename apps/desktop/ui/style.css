@@ -239,6 +239,12 @@ legend { font-weight: 650; padding: 0 6px; }
   .card .actions { flex-wrap: wrap; }
 }
 
+.keyrow { display: flex; align-items: center; gap: 10px; }
+.keyrow > span:first-child { min-width: 80px; }
+.keyrec { min-width: 200px; text-align: left; font: 13px ui-monospace, monospace; }
+.keyrec.recording { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--accent); }
+.keyrec.unset { color: var(--muted); }
+.hotkey-note .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .hotkey-note { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 8px; }
 .hotkey-note .bad { color: var(--bad); }
 .hotkey-note code { font: 12px ui-monospace, monospace; background: var(--bg); border-radius: 6px; padding: 1px 5px; }

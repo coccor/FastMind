@@ -862,32 +862,145 @@ $("#history-list").addEventListener("click", async (event) => {
 });
 
 // ---------- Settings ----------
+// ---------- Hotkeys ----------
+// Keys are recorded, not typed: click the button, press the keys. They're stored as accelerators
+// ("CommandOrControl+Alt+Space"), the form the desktop app registers.
+const isMac = navigator.platform.startsWith("Mac");
+
+function keyLabel(accelerator) {
+  if (!accelerator) return "Not set";
+  const names = { CommandOrControl: isMac ? "Cmd" : "Ctrl", Control: "Ctrl", Super: isMac ? "Cmd" : "Super", Alt: isMac ? "Option" : "Alt" };
+  return accelerator.split("+").map((part) => names[part] || part).join(" + ");
+}
+
+const KEY_NAMES = {
+  Space: "Space", Enter: "Enter", Tab: "Tab", Insert: "Insert", Delete: "Delete", Home: "Home", End: "End",
+  PageUp: "PageUp", PageDown: "PageDown", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  Minus: "Minus", Equal: "Equal", Comma: "Comma", Period: "Period", Slash: "Slash", Semicolon: "Semicolon",
+  Quote: "Quote", BracketLeft: "BracketLeft", BracketRight: "BracketRight", Backslash: "Backslash", Backquote: "Backquote",
+};
+
+/** The accelerator for a key press, or null while only modifiers are down. */
+function acceleratorFrom(event) {
+  const code = event.code;
+  let key = /^Key([A-Z])$/.exec(code)?.[1] || /^Digit(\d)$/.exec(code)?.[1] || /^(F\d{1,2})$/.exec(code)?.[1] || KEY_NAMES[code];
+  if (!key) return null;
+  const parts = [];
+  if (isMac ? event.metaKey : event.ctrlKey) parts.push("CommandOrControl");
+  if (isMac && event.ctrlKey) parts.push("Control");
+  if (!isMac && event.metaKey) parts.push("Super");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  // A key on its own would be taken from every app; function keys are the exception.
+  if (!parts.length && !/^F\d/.test(key)) return null;
+  return [...parts, key].join("+");
+}
+
+function showKeys() {
+  const form = $("#settings-form");
+  document.querySelectorAll(".keyrec").forEach((button) => {
+    const value = form[button.dataset.for].value;
+    button.textContent = keyLabel(value);
+    button.classList.toggle("unset", !value);
+  });
+}
+
+let recording = null;
+function stopRecording() {
+  if (!recording) return;
+  window.removeEventListener("keydown", recording.listener, true);
+  recording.button.classList.remove("recording");
+  recording = null;
+  showKeys();
+}
+
+function saveKey(name, value) {
+  const form = $("#settings-form");
+  form[name].value = value;
+  showKeys();
+  form.requestSubmit();
+}
+
+document.querySelectorAll(".keyrec").forEach((button) =>
+  button.addEventListener("click", () => {
+    if (recording?.button === button) return stopRecording();
+    stopRecording();
+    button.classList.add("recording");
+    button.textContent = "Press the keys…";
+    const listener = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.metaKey) return stopRecording();
+      const accelerator = acceleratorFrom(event);
+      if (!accelerator) {
+        const held = [event.ctrlKey && "Ctrl", event.metaKey && (isMac ? "Cmd" : "Super"), event.altKey && (isMac ? "Option" : "Alt"), event.shiftKey && "Shift"].filter(Boolean);
+        button.textContent = held.length ? held.join(" + ") + " + …" : "Press the keys… (with Ctrl, Alt, Shift or Super)";
+        return;
+      }
+      const name = button.dataset.for;
+      stopRecording();
+      saveKey(name, accelerator);
+    };
+    recording = { button, listener };
+    window.addEventListener("keydown", listener, true);
+  }),
+);
+document.querySelectorAll(".keyclear").forEach((button) =>
+  button.addEventListener("click", () => { stopRecording(); saveKey(button.dataset.for, ""); }),
+);
+
 // How the hotkeys are wired. On Wayland the desktop owns global keys: FastMind asks its shortcuts
-// service, and where that leaves the keys to the user (Hyprland) says what to add.
-async function loadHotkeyStatus() {
+// service; on Hyprland, which leaves the keys to its config, a button writes them there.
+async function loadHotkeyStatus(status) {
   const note = $("#hotkey-note");
   if (!tauri) { note.hidden = true; return; }
-  const status = await tauri.core.invoke("hotkey_status").catch(() => null);
+  status = status || (await tauri.core.invoke("hotkey_status").catch(() => null));
   const command = "<code>fastmind-desktop --capture</code> (or <code>--remember</code>)";
-  let html = "";
-  if (status?.how === "native" && status.problems?.length) {
-    html = status.problems.map((p) => `<p class="bad">${esc(p)}</p>`).join("");
-  } else if (status?.how === "portal") {
-    const lines = status.hyprland?.lines || [];
-    if (lines.length) {
-      html = `<p>On Wayland your desktop owns global keys. FastMind registered its two shortcuts with Hyprland; to give them these keys, add to <code>${esc(status.hyprland.file)}</code>:</p>
-        <code class="block">${lines.map(esc).join("\n")}</code>`;
+  const parts = [];
+  const hypr = status?.hyprland;
+  if (status?.how === "native") {
+    for (const problem of status.problems || []) parts.push(`<p class="bad">${esc(problem)}</p>`);
+  } else if (status?.how === "portal" && hypr) {
+    for (const taken of hypr.conflicts || []) parts.push(`<p class="bad">${esc(taken)} in Hyprland: pick another key, or change that bind.</p>`);
+    if (hypr.installed) {
+      parts.push(`<p>${icon("check")} Set up in <code>${esc(hypr.file)}</code>. FastMind updates it when you change a key here.</p>
+        <div class="actions"><button type="button" data-hotkeys="remove">Remove from Hyprland</button></div>`);
     } else {
-      const keys = (status.bound || []).map((b) => `${esc(b.id)}: ${esc(b.trigger || "not set yet")}`).join(" · ");
-      html = `<p>On Wayland your desktop owns global keys: FastMind asked it for these${keys ? ` (${keys})` : ""}. Change them in your desktop's keyboard settings.</p>`;
+      parts.push(`<p>Hyprland leaves global keys to its config. FastMind can add these lines to <code>${esc(hypr.file)}</code> (keeping a copy of it) and keep them in step with the keys here:</p>
+        <code class="block">${(hypr.lines || []).map(esc).join("\n")}</code>
+        <div class="actions"><button type="button" class="primary" data-hotkeys="install">Set up the hotkeys</button></div>`);
     }
+  } else if (status?.how === "portal") {
+    const keys = (status.bound || []).map((b) => `${esc(b.id)}: ${esc(b.trigger || "not set yet")}`).join(" · ");
+    parts.push(`<p>Your desktop owns global keys: FastMind asked it for these${keys ? ` (${keys})` : ""}.</p>`);
+    if (status.can_configure) parts.push(`<div class="actions"><button type="button" data-hotkeys="configure">Change in the desktop's settings…</button></div>`);
   } else if (status?.how === "none") {
-    html = `<p>This desktop has no global shortcuts service, so FastMind can't set the keys itself. Bind a key in your desktop's settings to run ${command}.</p>`;
+    parts.push(`<p>This desktop has no global shortcuts service, so FastMind can't set the keys itself. Bind a key in your desktop's settings to run ${command}.</p>`);
   }
-  if (html && status?.how !== "native") html += `<p class="muted">Any key binding can also run ${command}.</p>`;
-  note.innerHTML = html;
-  note.hidden = !html;
+  if (status?.problem) parts.push(`<p class="bad">${esc(status.problem)}</p>`);
+  if (parts.length && status?.how !== "native") parts.push(`<p class="muted">Any key binding can also run ${command}.</p>`);
+  note.innerHTML = parts.join("");
+  note.hidden = !parts.length;
 }
+
+$("#hotkey-note").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-hotkeys]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const what = button.dataset.hotkeys;
+    if (what === "configure") await tauri.core.invoke("hotkeys_configure");
+    else {
+      const status = await tauri.core.invoke("hotkeys_setup", { install: what === "install" });
+      await loadHotkeyStatus(status);
+      toast(what === "install" ? "The hotkeys are set up in Hyprland." : "Removed FastMind's hotkeys from Hyprland.");
+    }
+  } catch (error) {
+    toast(String(error.message || error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 async function loadSettings() {
   try {
@@ -898,6 +1011,7 @@ async function loadSettings() {
     form.inbox.value = settings.inbox;
     form.hotkey_capture.value = settings.hotkeys.capture;
     form.hotkey_remember.value = settings.hotkeys.remember;
+    showKeys();
     loadHotkeyStatus();
     form.autostart.checked = !!settings.autostart;
     const d = settings.dream;

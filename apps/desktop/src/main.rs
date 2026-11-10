@@ -17,6 +17,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Windo
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[cfg(target_os = "linux")]
+mod hyprland;
+#[cfg(target_os = "linux")]
 mod wayland_keys;
 
 struct Core(Arc<App>);
@@ -37,6 +39,64 @@ fn set_hotkey_status(app: &AppHandle, status: Value) {
 #[tauri::command]
 fn hotkey_status(status: tauri::State<'_, HotkeyStatus>) -> Value {
     status.0.lock().expect("hotkey status lock").clone()
+}
+
+/// The hotkeys from Settings that are set, as (id, accelerator).
+#[cfg(target_os = "linux")]
+fn hotkey_list(settings: &Settings) -> Vec<(&'static str, String)> {
+    [
+        ("capture", &settings.hotkeys.capture),
+        ("remember", &settings.hotkeys.remember),
+    ]
+    .into_iter()
+    .filter(|(_, keys)| !keys.trim().is_empty())
+    .map(|(id, keys)| (id, keys.trim().to_owned()))
+    .collect()
+}
+
+/// "Set up the hotkeys" (`install`) or "Remove" in Settings, where the desktop leaves the keys
+/// to its config: writes FastMind's block into Hyprland's config, or takes it out.
+#[tauri::command]
+async fn hotkeys_setup(app: AppHandle, install: bool) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let keys = hotkey_list(&app.state::<Core>().0.settings());
+        let status = tauri::async_runtime::spawn_blocking(move || {
+            let config = hyprland::Config::find().ok_or("this isn't Hyprland")?;
+            config.write(install.then_some(keys.as_slice()))?;
+            Ok::<_, String>(hyprland::status(&keys))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let mut current = app
+            .state::<HotkeyStatus>()
+            .0
+            .lock()
+            .expect("hotkey status lock")
+            .clone();
+        current["hyprland"] = status;
+        current["problem"] = Value::Null;
+        set_hotkey_status(&app, current.clone());
+        Ok(current)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (app, install);
+        Err("only needed on Linux".into())
+    }
+}
+
+/// "Change in the desktop's settings…": the desktop's own dialog for FastMind's shortcuts.
+#[tauri::command]
+async fn hotkeys_configure() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        wayland_keys::configure().await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("only needed on Linux".into())
+    }
 }
 
 /// What a launch asks for: `--capture` opens the capture box, `--remember` the search, so a
@@ -353,15 +413,7 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) {
     let _ = shortcuts.unregister_all();
     #[cfg(target_os = "linux")]
     if wayland_keys::in_wayland_session() {
-        let keys = [
-            ("capture", &settings.hotkeys.capture),
-            ("remember", &settings.hotkeys.remember),
-        ]
-        .into_iter()
-        .filter(|(_, keys)| !keys.trim().is_empty())
-        .map(|(id, keys)| (id, keys.trim().to_owned()))
-        .collect();
-        wayland_keys::bind(app.clone(), keys);
+        wayland_keys::bind(app.clone(), hotkey_list(settings));
         return;
     }
     let mut active = (None, None);
@@ -437,6 +489,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             call,
             hotkey_status,
+            hotkeys_setup,
+            hotkeys_configure,
             open_path,
             hide_capture,
             pick_folder

@@ -23,33 +23,25 @@ tray, where it dreams at night.
 
 ### Hotkeys on Linux (Wayland)
 
+To change a key, click it in Settings › Hotkeys and press the new one (Esc cancels).
+
 Wayland doesn't let an app take keys for the whole desktop, so there FastMind asks the desktop's
 global shortcuts service (the XDG portal) for them, and Settings › Hotkeys says how that went:
 
-- **KDE, GNOME**: the desktop may ask you to confirm the keys; change them later in its keyboard
-  settings.
-- **Hyprland** registers FastMind's shortcuts but leaves the keys to you. Settings shows the lines
-  to add, for the config Hyprland reads. For the default keys, in `~/.config/hypr/hyprland.lua`
-  (Hyprland 0.56 and later):
-
-  ```lua
-  hl.bind("CTRL + ALT + SPACE", hl.dsp.global("dev.coccor.fastmind:capture"))
-  hl.bind("CTRL + ALT + R", hl.dsp.global("dev.coccor.fastmind:remember"))
-  ```
-
-  or in `~/.config/hypr/hyprland.conf`:
-
-  ```
-  bind = CTRL ALT, SPACE, global, dev.coccor.fastmind:capture
-  bind = CTRL ALT, R, global, dev.coccor.fastmind:remember
-  ```
-
+- **Hyprland** registers FastMind's shortcuts but leaves the keys to its config. **Set up the
+  hotkeys** adds them to `~/.config/hypr/hyprland.lua` (or `hyprland.conf` before Hyprland 0.56)
+  in a block FastMind marks and owns, keeps a copy of the file as it was
+  (`hyprland.lua.before-fastmind`) and reloads Hyprland. From then on, changing a key in Settings
+  updates the block; **Remove from Hyprland** takes it out. Settings warns when a key is already
+  bound in Hyprland.
+- **KDE, GNOME**: the desktop may ask you to confirm the keys. Where it can, **Change in the
+  desktop's settings…** opens its own dialog for them.
 - **Anywhere else**, bind a key in your desktop to run `fastmind-desktop --capture` (or
   `--remember`): it opens the box in the FastMind that's already running.
 
 The portal only knows apps by their desktop entry, `dev.coccor.fastmind.desktop`. If none is
-installed, FastMind writes a hidden one to `~/.local/share/applications`, pointing at its binary. On X11 the
-hotkeys work as on Windows and macOS.
+installed, FastMind writes a hidden one to `~/.local/share/applications`, pointing at its binary.
+On X11 the hotkeys work as on Windows and macOS.
 
 ## Choosing the AI
 

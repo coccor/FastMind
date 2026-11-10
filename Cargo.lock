@@ -1075,6 +1075,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
+ "tempfile",
  "tokio",
 ]
 
