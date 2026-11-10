@@ -15,13 +15,18 @@ use crate::{Error, Result, demo, remember, text};
 use chrono::Local;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+type Live = Arc<Mutex<(Option<Instant>, remember::LiveIndex)>>;
 
 pub struct App {
     settings: Mutex<Settings>,
-    index: Mutex<(Option<Instant>, remember::LiveIndex)>,
+    index: Live,
+    /// Captures a model is writing right now, by capture id.
+    writing: Arc<Mutex<HashSet<String>>>,
     /// Set while Dream runs, so a second run waits its turn.
     dreaming: Mutex<()>,
     persist: bool,
@@ -29,6 +34,48 @@ pub struct App {
 
 /// How long a search index is reused before the files are read again.
 const INDEX_FRESH: Duration = Duration::from_secs(1);
+
+/// One capture through the writing step, with the index behind `live`. Marks it busy while the
+/// model works, so the inbox can say so.
+fn write_with(
+    nb: &Notebook,
+    live: &Live,
+    writing: &Arc<Mutex<HashSet<String>>>,
+    settings: &Settings,
+    id: &str,
+    force: bool,
+) -> Result<crate::write::Outcome> {
+    let model =
+        Model::from_settings(&settings.model).ok_or_else(|| Error::msg("no model is chosen"))?;
+    writing.lock().expect("writing lock").insert(id.to_owned());
+    let with_index = |use_it: &mut dyn FnMut(&Index, &[crate::Note])| {
+        let mut guard = live.lock().expect("index lock");
+        let (checked, index) = &mut *guard;
+        *checked = Some(Instant::now());
+        index.refresh(nb);
+        let notes = index.notes();
+        let built = index.refresh_if_built(nb);
+        use_it(built, &notes);
+    };
+    let schema = crate::write::schema();
+    let ask = |system: &str, user: &str, images: &[crate::model::Image]| {
+        model.complete_json(system, user, images, &schema)
+    };
+    let result = crate::write::write_capture(
+        nb,
+        id,
+        &settings.writing,
+        &settings.inbox,
+        &settings.ai.folder,
+        &settings.model.id(),
+        &with_index,
+        &|url| crate::capture::page_text(url),
+        &ask,
+        force,
+    );
+    writing.lock().expect("writing lock").remove(id);
+    result
+}
 
 fn arg<T: for<'de> Deserialize<'de>>(args: &Value, key: &str) -> Result<T> {
     serde_json::from_value(args.get(key).cloned().unwrap_or(Value::Null))
@@ -40,7 +87,8 @@ impl App {
     pub fn new(settings: Settings) -> Self {
         Self {
             settings: Mutex::new(settings),
-            index: Mutex::new((None, remember::LiveIndex::default())),
+            index: Arc::new(Mutex::new((None, remember::LiveIndex::default()))),
+            writing: Arc::new(Mutex::new(HashSet::new())),
             dreaming: Mutex::new(()),
             persist: true,
         }
@@ -130,7 +178,28 @@ impl App {
                     .or_else(|| {
                         capture::is_url(request.text.trim()).then(|| request.text.trim().to_owned())
                     });
-                if let (Some(url), true) = (link, self.settings().fetch_link_titles) {
+                let settings = self.settings();
+                let writes = settings.model.is_on() && settings.writing.enabled;
+                if let (true, Some(id)) = (writes, saved.capture_id.clone()) {
+                    // The model reads the page itself, so no separate title fetch.
+                    if request.wait {
+                        let outcome = self.write_capture(&nb, &id, false);
+                        let mut out = json!(saved);
+                        match outcome {
+                            Ok(outcome) => {
+                                out["path"] = json!(outcome.path);
+                                out["title"] = json!(outcome.title);
+                                out["written_by"] = json!(settings.model.id());
+                            }
+                            Err(error) => out["write_error"] = json!(error.to_string()),
+                        }
+                        return Ok(out);
+                    }
+                    self.write_in_background(&nb, vec![id]);
+                    let mut out = json!(saved);
+                    out["writing"] = json!(true);
+                    return Ok(out);
+                } else if let (Some(url), true) = (link, settings.fetch_link_titles) {
                     let (nb, saved) = (nb.clone(), saved.clone());
                     std::thread::spawn(move || {
                         let _ = capture::enrich_link(&nb, &saved, &url);
@@ -159,7 +228,18 @@ impl App {
             "read" => {
                 let path: String = arg(&args, "path")?;
                 let note = nb.read(&path)?;
-                json!({ "path": note.path, "title": note.title, "text": note.text, "abs_path": nb.path(&path)? })
+                let capture_id = note.front.text("capture_id").map(str::to_owned);
+                let kept = capture_id
+                    .as_deref()
+                    .is_some_and(|id| crate::capture::Raw::load(&nb, id).is_ok());
+                let writing = capture_id
+                    .as_deref()
+                    .is_some_and(|id| self.writing.lock().expect("writing lock").contains(id));
+                json!({
+                    "path": note.path, "title": note.title, "text": note.text, "abs_path": nb.path(&path)?,
+                    "capture_id": capture_id.filter(|_| kept), "written_by": note.front.text("written_by"),
+                    "writing": writing,
+                })
             }
             "open" => {
                 let path: String = arg(&args, "path")?;
@@ -167,6 +247,43 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "rewrite_note" => {
+                // Write (or write again) the note from the capture it was made from. Asked for
+                // by the user, so it replaces the note even if edited: History undoes it.
+                let path: String = arg(&args, "path")?;
+                let id = self.capture_id_of(&nb, &path)?;
+                if !self.settings().model.is_on() {
+                    return Err(Error::msg("choose a model in Settings to write notes"));
+                }
+                // The note may have been filed since: write it where it is now.
+                let mut raw = crate::capture::Raw::load(&nb, &id)?;
+                if raw.note != path {
+                    raw.note = path.clone();
+                    raw.save(&nb)?;
+                }
+                let outcome = self.write_capture(&nb, &id, true)?;
+                json!(outcome)
+            }
+            "write_pending" => {
+                let ids = if self.settings().model.is_on() && self.settings().writing.enabled {
+                    crate::write::pending(&nb, 7)
+                } else {
+                    Vec::new()
+                };
+                let count = ids.len();
+                self.write_in_background(&nb, ids);
+                json!({ "started": count })
+            }
+            "capture_original" => {
+                let path: String = arg(&args, "path")?;
+                let id = self.capture_id_of(&nb, &path)?;
+                let raw = crate::capture::Raw::load(&nb, &id)?;
+                json!({
+                    "captured": raw.captured, "text": raw.text, "url": raw.url, "tags": raw.tags,
+                    "attachments": raw.attachments, "written_by": raw.written_by, "failed": raw.failed,
+                    "writing": self.writing.lock().expect("writing lock").contains(&id),
+                })
+            }
             "home" => self.home(&nb, now),
             "image" => {
                 // An image inside the notebook, for showing in a note. Nothing else is served.
@@ -194,12 +311,14 @@ impl App {
             "suggest_homes" => {
                 let path: String = arg(&args, "path")?;
                 let settings = self.settings();
-                json!(self.with_index(&nb, |index| crate::filing::suggest(
-                    index,
-                    &path,
-                    &settings.inbox,
-                    &settings.ai.folder
-                )))
+                let mut homes = self.with_index(&nb, |index| {
+                    crate::filing::suggest(index, &path, &settings.inbox, &settings.ai.folder)
+                });
+                if let Some(home) = self.written_home(&nb, &path) {
+                    homes.retain(|h| !(h.kind == home.kind && h.target == home.target));
+                    homes.insert(0, home);
+                }
+                json!(homes)
             }
             "folders" => json!(crate::filing::folders(&self.notes(&nb))),
             "file_note" => {
@@ -513,6 +632,9 @@ impl App {
                 "ran_at": report.ran_at, "summary": report.summary, "pending": pending,
             })),
             "model": settings.model.label(),
+            "model_on": settings.model.is_on(),
+            "writes": settings.model.is_on() && settings.writing.enabled,
+            "writing": self.writing.lock().expect("writing lock").len(),
             "hotkeys": settings.hotkeys,
         })
     }
@@ -594,8 +716,88 @@ impl App {
         })
     }
 
+    /// The capture a note was made from.
+    fn capture_id_of(&self, nb: &Notebook, path: &str) -> Result<String> {
+        let note = nb.read(path)?;
+        note.front
+            .text("capture_id")
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::msg(
+                    "this note wasn't captured with FastMind, so there's nothing to write it from",
+                )
+            })
+    }
+
+    /// The home the model suggested when it wrote the note, as a filing choice.
+    fn written_home(&self, nb: &Notebook, path: &str) -> Option<crate::filing::Home> {
+        let note = nb.read(path).ok()?;
+        let home = note.front.text("suggested_home")?.trim().to_owned();
+        let because: Vec<String> = note
+            .front
+            .text("suggested_because")
+            .map(|b| vec![b.to_owned()])
+            .unwrap_or_default();
+        if let Some(name) = home.strip_prefix("[[").and_then(|h| h.strip_suffix("]]")) {
+            let target = self.notes(nb).into_iter().find(|n| n.stem() == name)?.path;
+            Some(crate::filing::Home {
+                kind: "note".into(),
+                label: name.to_owned(),
+                target,
+                because,
+                score: f32::MAX,
+            })
+        } else {
+            let folder = home.trim_matches('/').to_owned();
+            nb.path(&folder).ok().filter(|p| p.is_dir())?;
+            Some(crate::filing::Home {
+                kind: "folder".into(),
+                label: format!("{folder}/"),
+                target: folder,
+                because,
+                score: f32::MAX,
+            })
+        }
+    }
+
+    /// Writes the note for capture `id` now, with the chosen model.
+    pub fn write_capture(
+        &self,
+        nb: &Notebook,
+        id: &str,
+        force: bool,
+    ) -> Result<crate::write::Outcome> {
+        let result = write_with(nb, &self.index, &self.writing, &self.settings(), id, force);
+        self.invalidate();
+        result
+    }
+
+    /// Writes the notes for `ids` one after another on a thread of their own.
+    fn write_in_background(&self, nb: &Notebook, ids: Vec<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let (nb, live, writing, settings) = (
+            nb.clone(),
+            self.index.clone(),
+            self.writing.clone(),
+            self.settings(),
+        );
+        {
+            let mut busy = writing.lock().expect("writing lock");
+            busy.extend(ids.iter().cloned());
+        }
+        std::thread::spawn(move || {
+            for id in ids {
+                let _ = write_with(&nb, &live, &writing, &settings, &id, false);
+                live.lock().expect("index lock").0 = None;
+            }
+        });
+    }
+
     fn inbox(&self, nb: &Notebook) -> Vec<Value> {
         let inbox = self.settings().inbox;
+        let model_on = self.settings().model.is_on();
         let mut notes: Vec<_> = self
             .notes(nb)
             .into_iter()
@@ -611,12 +813,27 @@ impl App {
         notes
             .iter()
             .map(|note| {
+                let id = note.front.text("capture_id").map(str::to_owned);
+                let raw = id
+                    .as_deref()
+                    .and_then(|id| crate::capture::Raw::load(nb, id).ok());
+                let writing = id
+                    .as_deref()
+                    .is_some_and(|id| self.writing.lock().expect("writing lock").contains(id));
+                let summary = note.front.text("summary").map(str::to_owned);
+                let snippet = summary.unwrap_or_else(|| {
+                    text::excerpt(&note.body().replace(&format!("# {}", note.title), ""), 200)
+                });
                 json!({
                     "path": note.path,
                     "title": note.title,
                     "captured": note.created.unwrap_or(note.touched),
-                    "snippet": text::excerpt(&note.body().replace(&format!("# {}", note.title), ""), 200),
+                    "snippet": snippet,
                     "tags": note.front.tags(),
+                    "writing": writing,
+                    "written_by": note.front.text("written_by"),
+                    "write_failed": raw.as_ref().and_then(|r| r.failed.clone()),
+                    "can_write": raw.is_some() && model_on,
                 })
             })
             .collect()

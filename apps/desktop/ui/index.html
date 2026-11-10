@@ -194,16 +194,22 @@
           </fieldset>
           <fieldset>
             <legend>Model</legend>
-            <p class="muted small">Optional. Without one, Dream and Remember work from text statistics alone and nothing leaves this computer.</p>
+            <p class="muted small">Optional. A model writes your captures into finished notes and improves Dream's titles and Remember's answers. Without one, everything works from text statistics alone and nothing leaves this computer.</p>
             <label>Provider
               <select name="provider">
                 <option value="none">None (offline)</option>
+                <option value="claude-code">Claude Code (uses your Claude plan)</option>
+                <option value="claude">Claude API (needs ANTHROPIC_API_KEY)</option>
                 <option value="local">Local server (Ollama, LM Studio…)</option>
-                <option value="claude">Claude (needs ANTHROPIC_API_KEY)</option>
               </select>
             </label>
-            <label>Model <input name="model" placeholder="llama3.2 / claude-opus-5-5"></label>
+            <label>Model <input name="model" placeholder="sonnet"></label>
             <label>Server <input name="base_url" placeholder="http://localhost:11434/v1"></label>
+            <div id="writing-fields">
+              <label class="check"><input type="checkbox" name="write_enabled"> Write each capture into a finished note: title, summary, key points, tasks, related notes and where it belongs</label>
+              <p class="muted small">Your capture is saved as you typed it at once; the written note replaces it a few seconds later, unless you've edited it. The original is always kept, and History undoes the rewrite.</p>
+              <label class="stack">How you like your notes written <textarea name="write_instructions" rows="3" placeholder="e.g. Always write in English. Keep it short. Use bullet points rather than prose."></textarea></label>
+            </div>
           </fieldset>
           <div class="row gap"><button class="primary" type="submit">Save settings</button><span id="settings-saved" class="muted small"></span></div>
         </form>

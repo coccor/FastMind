@@ -216,8 +216,11 @@ fn nightly(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_import: Option<std::time::Instant> = None;
         loop {
-            std::thread::sleep(Duration::from_secs(300));
+            // Captures saved while FastMind was closed, or before a model was chosen, are
+            // written now (the last week's, and only notes nobody has edited since).
             let core = app.state::<Core>().0.clone();
+            let _ = core.call("write_pending", json!({}));
+            std::thread::sleep(Duration::from_secs(300));
             let settings = core.settings();
             // AI sessions arrive through the day: import them every half hour, so they're
             // searchable the same afternoon.

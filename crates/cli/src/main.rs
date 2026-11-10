@@ -15,8 +15,11 @@ const HELP: &str = "FastMind: capture, remember, dream. Plain Markdown, any OS.
 
 Usage: fastmind [--notebook DIR] [--json] <command> [args]
 
-  capture TEXT [--url URL] [--tag TAG]... [--attach FILE]... [--folder DIR]
-                          Save a note in the inbox (TEXT \"-\" reads stdin)
+  capture TEXT [--url URL] [--tag TAG]... [--attach FILE]... [--folder DIR] [--raw]
+                          Save a note in the inbox (TEXT \"-\" reads stdin). With a
+                          model chosen, it writes the note before returning; --raw
+                          saves it as typed
+  write NOTE              Write a captured note again from what was captured
   search QUERY            Find notes (#tag filters by tag)
   ask QUESTION            Answer from your notes, with sources
   inbox                   Notes waiting in the inbox
@@ -166,6 +169,12 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
                 .map(PathBuf::from)
                 .collect();
             let folder = take_flag(&mut rest, "--folder").pop();
+            let raw = if let Some(at) = rest.iter().position(|a| a == "--raw") {
+                rest.remove(at);
+                true
+            } else {
+                false
+            };
             let mut text = rest.join(" ");
             if text == "-" {
                 text.clear();
@@ -173,9 +182,33 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
                     .read_to_string(&mut text)
                     .map_err(|e| Failure::Failed(e.to_string()))?;
             }
-            let saved = app.call("capture", json!({"text": text, "url": url, "tags": tags, "attachments": attachments, "folder": folder}))?;
+            let writes = !raw && app.settings().model.is_on() && app.settings().writing.enabled;
+            if writes && !args.json {
+                eprintln!("Writing the note with {}…", app.settings().model.label());
+            }
+            let saved = app.call("capture", json!({"text": text, "url": url, "tags": tags, "attachments": attachments, "folder": folder, "wait": writes}))?;
             out(&saved, &|v| {
-                println!("Saved \"{}\" as {}", s(&v["title"]), s(&v["path"]))
+                println!("Saved \"{}\" as {}", s(&v["title"]), s(&v["path"]));
+                if let Some(error) = v["write_error"].as_str() {
+                    println!("  Kept as you typed it: {error}");
+                }
+            });
+        }
+        "write" | "rewrite" => {
+            let path = rest.join(" ");
+            if path.is_empty() {
+                return Err(usage("write needs a note's path"));
+            }
+            if !args.json {
+                eprintln!("Writing the note with {}…", app.settings().model.label());
+            }
+            let done = app.call("rewrite_note", json!({"path": path}))?;
+            out(&done, &|v| {
+                println!(
+                    "Wrote \"{}\" as {} (undo it from `fastmind history`)",
+                    s(&v["title"]),
+                    s(&v["path"])
+                )
             });
         }
         "search" | "find" => {

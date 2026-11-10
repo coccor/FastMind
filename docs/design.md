@@ -94,6 +94,23 @@ accepting one doesn't make another stale. If a file it needs is gone, the propos
   listing's sizes and times: about 13 ms for 5,000 notes when nothing changed, and only changed
   files are read. Dream compares only pairs that share one of their strongest words, and looks
   for link fixes among names with the same first letter.
+- **Writing captures** (`write.rs`), FastCapture's two steps. Step one saves the note as typed
+  and keeps the capture itself in `.fastmind/raw/<id>.json` (text, link, tags, stored files,
+  the note's path and hash); the note carries `capture_id`. Step two, on a background thread,
+  fetches each link's main text (article, else main, else body, without scripts and
+  navigation; `meta refresh` followed), reads text attachments and up to five images, and
+  gives the model the capture in delimited blocks: `<your_note>`, `<source>`,
+  `<attachment>`, `<candidate_notes>` (the 10 best search hits plus the notebook's home
+  notes), `<home_folders>` and the most used tags. The rules are FastCapture's; the user's own
+  preferences follow them. The reply is JSON (structured output on the Claude API and Claude
+  Code); a reply that can't be used goes back once with what was wrong. Links and homes the
+  model made up are dropped, tags are cleaned and capped. The note is replaced in one journal
+  transaction, only if its hash is still the one FastMind wrote, and renamed after its new
+  title while it's in the inbox. Writing again is explicit and works on edited or filed notes
+  (a filed note keeps its name and place). Captures saved while no model ran are written when
+  the app next runs, if from the last week and untouched. **Claude Code** is run as
+  `claude -p` with stream-json in and out, no tools, no MCP servers, no settings and no
+  `ANTHROPIC_*` variables, in an empty folder.
 - **MCP** (`crates/cli/src/mcp.rs`): newline-delimited JSON-RPC on stdio, protocol 2025-06-18,
   with four tools.
 
@@ -102,5 +119,6 @@ accepting one doesn't make another stale. If a file it needs is gone, the propos
 - Installers (MSI/DMG/AppImage through `tauri build`) and signing; CI uploads raw binaries
 - Remind, Focus and Practice from the backlog; Remember by meaning (embeddings)
 - Idle detection for Dream (it runs in its time window; it doesn't wait for the machine to be idle)
-- FastCapture's model pipeline (PDF and Word extraction, a model writing the note) isn't
-  ported; capture saves your text as written, plus a link's title and description
+- PDF and Word text isn't extracted for the writing step yet (FastCapture's extractors aren't
+  ported); such attachments are named to the model as not read
+- Kept captures (`.fastmind/raw/`) aren't packed or pruned yet

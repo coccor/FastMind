@@ -16,6 +16,12 @@ and the memory your AI coding sessions never had.
 - **Capture from anywhere.** One hotkey opens a small box over whatever you're doing. Type,
   paste a screenshot or drop a file, press **Ctrl+Enter**, and you're back. A link gets its
   page's title and description. Esc keeps a draft.
+- **Captures become finished notes.** With a model chosen, each capture is written up a few
+  seconds after you save it: a clear title, a one-sentence summary, your text tidied in your own
+  voice, key points, tasks, links to the notes it relates to, and where it belongs. The model
+  reads the pages you linked, the screenshots and the text files you attached, and the notes
+  and folders you already have. What you captured is always kept, a note you've edited is never
+  rewritten, and History undoes it. **Claude Code** works with your Claude plan, no API key.
 - **File in one key.** The inbox suggests where each note belongs, from the notes it's most like
   (a folder, or a topic note that gets a link to it). **Enter** files it there.
 - **Remember.** Another hotkey searches everything as you type, typos and all. End with `?` and
@@ -107,6 +113,7 @@ in your inbox tagged `agent`, with secrets removed.
 ```
 fastmind setup ~/Notes                    # choose the notebook
 fastmind capture "lag spikes in the ledger batch" --tag perf --attach ./ledger.log
+fastmind write inbox/Lag.md               # write a captured note (again) with the model
 fastmind search "#perf ledger"
 fastmind ask "why did the ledger batch lag?"
 fastmind dream | dream apply all | dream undo p3

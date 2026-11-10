@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
 
+mod claude_code;
+pub use claude_code::find as find_claude_code;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase", tag = "provider")]
 pub enum ModelSettings {
@@ -26,6 +29,30 @@ pub enum ModelSettings {
         #[serde(default = "default_claude_model")]
         model: String,
     },
+    /// The user's own Claude Code (`claude`), signed in to their plan: no API key needed. Run
+    /// with no tools, no MCP servers and no settings, once per request.
+    #[serde(rename = "claude-code")]
+    ClaudeCode {
+        #[serde(default = "default_claude_code_model")]
+        model: String,
+    },
+}
+
+fn default_claude_code_model() -> String {
+    "sonnet".into()
+}
+
+/// An image sent with a request: a screenshot or photo the user captured.
+#[derive(Clone, Debug)]
+pub struct Image {
+    pub media_type: String,
+    pub data: Vec<u8>,
+}
+
+impl Image {
+    fn base64(&self) -> String {
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data)
+    }
 }
 
 fn default_local_url() -> String {
@@ -46,6 +73,17 @@ impl ModelSettings {
             ModelSettings::None => "No model (text statistics only)".into(),
             ModelSettings::Local { model, base_url } => format!("Local: {model} at {base_url}"),
             ModelSettings::Claude { model } => format!("Claude: {model}"),
+            ModelSettings::ClaudeCode { model } => format!("Claude Code: {model}"),
+        }
+    }
+
+    /// Short, for a note's `written_by:`: `claude/claude-opus-5-5`, `local/llama3.2`.
+    pub fn id(&self) -> String {
+        match self {
+            ModelSettings::None => "none".into(),
+            ModelSettings::Local { model, .. } => format!("local/{model}"),
+            ModelSettings::Claude { model } => format!("claude/{model}"),
+            ModelSettings::ClaudeCode { model } => format!("claude-code/{model}"),
         }
     }
 
@@ -81,6 +119,74 @@ impl Model {
             ModelSettings::None => Err(Error::msg("no model is chosen")),
             ModelSettings::Local { base_url, model } => self.local(base_url, model, system, user),
             ModelSettings::Claude { model } => self.claude(model, system, user),
+            ModelSettings::ClaudeCode { model } => claude_code::run(model, system, user, &[], None),
+        }
+    }
+
+    /// A reply that is one JSON object matching `schema`, with `images` sent before the text.
+    /// The JSON comes back as text; a model that can't be held to the schema is asked for it
+    /// in the prompt, so the caller still checks what it got.
+    pub fn complete_json(
+        &self,
+        system: &str,
+        user: &str,
+        images: &[Image],
+        schema: &Value,
+    ) -> Result<String> {
+        match &self.settings {
+            ModelSettings::None => Err(Error::msg("no model is chosen")),
+            ModelSettings::Local { base_url, model } => {
+                let mut content = vec![json!({"type": "text", "text": user})];
+                for image in images {
+                    content.push(json!({
+                        "type": "image_url",
+                        "image_url": {"url": format!("data:{};base64,{}", image.media_type, image.base64())}
+                    }));
+                }
+                let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+                let body = json!({
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": if images.is_empty() { json!(user) } else { json!(content) }},
+                    ],
+                    "response_format": {"type": "json_schema", "json_schema": {"name": "note", "schema": schema}},
+                    "stream": false,
+                });
+                let response: Value = self
+                    .agent
+                    .post(&url)
+                    .send_json(body)
+                    .map_err(|error| {
+                        Error::msg(format!("local model at {base_url}: {}", describe(error)))
+                    })?
+                    .into_json()?;
+                response["choices"][0]["message"]["content"]
+                    .as_str()
+                    .map(|text| text.trim().to_owned())
+                    .ok_or_else(|| Error::msg("the local model's reply had no text"))
+            }
+            ModelSettings::Claude { model } => {
+                let mut content: Vec<Value> = images
+                    .iter()
+                    .map(|image| {
+                        json!({"type": "image", "source": {"type": "base64", "media_type": image.media_type, "data": image.base64()}})
+                    })
+                    .collect();
+                content.push(json!({"type": "text", "text": user}));
+                let body = json!({
+                    "model": model,
+                    "max_tokens": 16000,
+                    "system": system,
+                    "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+                    "fallbacks": "default",
+                    "messages": [{"role": "user", "content": content}],
+                });
+                self.claude_request(body)
+            }
+            ModelSettings::ClaudeCode { model } => {
+                claude_code::run(model, system, user, images, Some(schema))
+            }
         }
     }
 
@@ -107,10 +213,6 @@ impl Model {
     }
 
     fn claude(&self, model: &str, system: &str, user: &str) -> Result<String> {
-        let key = std::env::var("ANTHROPIC_API_KEY")
-            .ok()
-            .filter(|key| !key.trim().is_empty())
-            .ok_or_else(|| Error::msg("Claude needs ANTHROPIC_API_KEY set"))?;
         let body = json!({
             "model": model,
             "max_tokens": 16000,
@@ -119,6 +221,14 @@ impl Model {
             "fallbacks": "default",
             "messages": [{"role": "user", "content": user}],
         });
+        self.claude_request(body)
+    }
+
+    fn claude_request(&self, body: Value) -> Result<String> {
+        let key = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| Error::msg("Claude needs ANTHROPIC_API_KEY set"))?;
         let response: Value = self
             .agent
             .post("https://api.anthropic.com/v1/messages")

@@ -26,6 +26,9 @@ pub struct Capture {
     /// bytes, base64-encoded.
     #[serde(default)]
     pub files: Vec<InlineFile>,
+    /// Write the note with the model before returning, instead of in the background.
+    #[serde(default)]
+    pub wait: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -47,6 +50,74 @@ pub struct Saved {
     /// Hash of the note as saved: a later background update only applies to it unchanged.
     #[serde(default)]
     pub written: u64,
+    /// The raw capture kept for the writing step, in `.fastmind/raw/<id>.json`.
+    #[serde(default)]
+    pub capture_id: Option<String>,
+}
+
+/// What you captured, exactly as you gave it: kept so a model can write the note from it, and
+/// write it again later. The note itself is yours to edit; this record never changes, except
+/// to say which note was written from it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Raw {
+    pub id: String,
+    /// `YYYY-MM-DDTHH:MM`.
+    pub captured: String,
+    pub text: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// The stored files, relative to the notebook.
+    #[serde(default)]
+    pub attachments: Vec<String>,
+    /// The note now holding this capture, relative to the notebook.
+    pub note: String,
+    /// The note's hash as FastMind last wrote it: a note with another hash was edited.
+    pub note_hash: u64,
+    /// Which model wrote the note, once one has.
+    #[serde(default)]
+    pub written_by: Option<String>,
+    /// Why writing failed, the last time it was tried.
+    #[serde(default)]
+    pub failed: Option<String>,
+}
+
+pub fn raw_dir(nb: &Notebook) -> PathBuf {
+    nb.state_dir().join("raw")
+}
+
+impl Raw {
+    pub fn load(nb: &Notebook, id: &str) -> Result<Raw> {
+        if id.contains(['/', '\\', '.']) {
+            return Err(Error::msg("bad capture id"));
+        }
+        let bytes = fs::read(raw_dir(nb).join(format!("{id}.json")))
+            .map_err(|_| Error::msg("the original capture isn't kept for this note"))?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    pub fn save(&self, nb: &Notebook) -> Result<()> {
+        let dir = raw_dir(nb);
+        fs::create_dir_all(&dir)?;
+        fsx::write_atomic(
+            &dir.join(format!("{}.json", self.id)),
+            &serde_json::to_vec_pretty(self)?,
+        )
+    }
+
+    /// Every kept capture, newest first.
+    pub fn all(nb: &Notebook) -> Vec<Raw> {
+        let mut out: Vec<Raw> = fs::read_dir(raw_dir(nb))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|entry| serde_json::from_slice(&fs::read(entry.path()).ok()?).ok())
+            .collect();
+        out.sort_by(|a: &Raw, b: &Raw| b.id.cmp(&a.id));
+        out
+    }
 }
 
 /// A free file name in `dir`, claimed by creating it empty: another capture at the same
@@ -126,6 +197,7 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
     }
 
     let now = Local::now();
+    let capture_id = crate::journal::new_id();
     let names: Vec<PathBuf> = sources
         .iter()
         .map(|(name, _)| PathBuf::from(name))
@@ -160,13 +232,14 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
         "---".to_owned(),
         "type: capture".to_owned(),
         format!("captured: {}", now.format("%Y-%m-%dT%H:%M")),
+        format!("capture_id: {capture_id}"),
         "status: inbox".to_owned(),
     ];
     if let Some(url) = &url {
         front.push(format!("source_url: {}", quote(url)));
     }
     if !tags.is_empty() {
-        front.push(render("tags", &Value::List(tags)));
+        front.push(render("tags", &Value::List(tags.clone())));
     }
     front.push("---".to_owned());
 
@@ -187,6 +260,7 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
 
     // Attachments are written first; if the note then fails, they are removed again.
     let mut written: Vec<PathBuf> = Vec::new();
+    let mut stored: Vec<String> = Vec::new();
     if !sources.is_empty() {
         let attach_dir = dir.join("attachments");
         fs::create_dir_all(&attach_dir)?;
@@ -220,6 +294,11 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
                 return Err(error.into());
             }
             written.push(target);
+            stored.push(if folder.is_empty() {
+                format!("attachments/{free}")
+            } else {
+                format!("{folder}/attachments/{free}")
+            });
             let link = format!("attachments/{}", free.replace(' ', "%20"));
             if is_image(&ext) {
                 body.push_str(&format!("![{free}]({link})\n"));
@@ -241,10 +320,26 @@ pub fn save(nb: &Notebook, inbox: &str, capture: &Capture) -> Result<Saved> {
         let _ = fs::remove_file(dir.join(&name));
         return Err(error);
     }
+    let hash = text::fnv(note.as_bytes());
+    let raw = Raw {
+        id: capture_id.clone(),
+        captured: now.format("%Y-%m-%dT%H:%M").to_string(),
+        text: capture.text.clone(),
+        url,
+        tags,
+        attachments: stored,
+        note: rel.clone(),
+        note_hash: hash,
+        written_by: None,
+        failed: None,
+    };
+    // The note is saved either way; without this record it just can't be written by a model.
+    let kept = raw.save(nb).is_ok();
     Ok(Saved {
         path: rel,
         title,
-        written: text::fnv(note.as_bytes()),
+        written: hash,
+        capture_id: kept.then_some(capture_id),
     })
 }
 
@@ -308,6 +403,170 @@ pub fn page_info(url: &str) -> Option<(String, Option<String>)> {
     Some((title, description))
 }
 
+/// A page as the writing step reads it: what it says it is, and its main text.
+#[derive(Clone, Debug, Default)]
+pub struct Page {
+    pub title: Option<String>,
+    pub site: Option<String>,
+    pub text: String,
+}
+
+/// The page at `url`, read once (8 seconds, 2 MB): its title, site name and main text, the
+/// article or main element when it has one, without scripts, styles and navigation.
+pub fn page_text(url: &str) -> std::result::Result<Page, String> {
+    let mut url = url.to_owned();
+    // A page that only redirects with `<meta http-equiv="refresh">` is followed, twice at most.
+    for _ in 0..3 {
+        match fetch_page(&url)? {
+            Fetched::Page(page) => return Ok(page),
+            Fetched::Refresh(next) => url = next,
+        }
+    }
+    Err("redirects too many times".into())
+}
+
+enum Fetched {
+    Page(Page),
+    Refresh(String),
+}
+
+/// The target of a `<meta http-equiv="refresh" content="0; url=…">`, made absolute.
+pub fn meta_refresh(html: &str, base: &str) -> Option<String> {
+    static REFRESH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = REFRESH.get_or_init(|| {
+        regex::Regex::new(r#"(?is)<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["'][^"']*?url\s*=\s*([^"'\s>]+)"#)
+            .expect("valid")
+    });
+    let target = pattern
+        .captures(html)?
+        .get(1)?
+        .as_str()
+        .trim_matches(['\'', '"'])
+        .to_owned();
+    if target.starts_with("http://") || target.starts_with("https://") {
+        return Some(target);
+    }
+    let origin_end = base
+        .find("://")
+        .map(|at| at + 3)
+        .and_then(|at| base[at..].find('/').map(|p| p + at))
+        .unwrap_or(base.len());
+    if target.starts_with('/') {
+        Some(format!("{}{target}", &base[..origin_end]))
+    } else {
+        let dir_end = base
+            .rfind('/')
+            .filter(|at| *at >= origin_end)
+            .unwrap_or(origin_end);
+        Some(format!("{}/{target}", &base[..dir_end]))
+    }
+}
+
+fn fetch_page(url: &str) -> std::result::Result<Fetched, String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(4))
+        .timeout(std::time::Duration::from_secs(8))
+        .redirects(5)
+        .user_agent("Mozilla/5.0 (FastMind; +https://github.com/coccor/FastMind)")
+        .build();
+    let response = agent.get(url).call().map_err(|error| match error {
+        ureq::Error::Status(code, _) => format!("failed ({code})"),
+        ureq::Error::Transport(_) => "couldn't be reached".to_owned(),
+    })?;
+    let kind = response.content_type().to_owned();
+    let mut body = String::new();
+    std::io::Read::read_to_string(
+        &mut std::io::Read::take(response.into_reader(), 2_000_000),
+        &mut body,
+    )
+    .map_err(|_| "couldn't be read".to_owned())?;
+    if kind.starts_with("text/plain") || kind.contains("markdown") {
+        return Ok(Fetched::Page(Page {
+            title: None,
+            site: None,
+            text: body.chars().take(20_000).collect(),
+        }));
+    }
+    if !kind.contains("html") {
+        return Err(format!("not a web page ({kind})"));
+    }
+    if body.len() < 4000
+        && let Some(next) = meta_refresh(&body, url)
+    {
+        return Ok(Fetched::Refresh(next));
+    }
+    Ok(Fetched::Page(html_to_page(&body)))
+}
+
+/// The readable part of an HTML page, as plain text with paragraphs kept.
+pub fn html_to_page(html: &str) -> Page {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static PARTS: OnceLock<(Vec<Regex>, Regex, Regex, Regex, Regex)> = OnceLock::new();
+    let (noise, block, tag, blank, site) = PARTS.get_or_init(|| {
+        let noise = [
+            "script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form",
+            "template", "iframe",
+        ]
+        .iter()
+        .map(|name| Regex::new(&format!(r"(?is)<{name}\b.*?</{name}\s*>")).expect("valid"))
+        .collect();
+        (
+            noise,
+            Regex::new(r"(?i)<(/?(p|div|section|article|li|ul|ol|h[1-6]|tr|table|blockquote|pre)\b[^>]*|br\s*/?)>")
+                .expect("valid"),
+            Regex::new(r"(?s)<[^>]*>").expect("valid"),
+            Regex::new(r"\n\s*\n(\s*\n)+").expect("valid"),
+            Regex::new(r#"(?is)<meta\s[^>]*property\s*=\s*["']og:site_name["'][^>]*content\s*=\s*["']([^"']*)["']"#)
+                .expect("valid"),
+        )
+    });
+    let lower = html.to_lowercase();
+    let title = {
+        let start = lower.find("<title");
+        start.and_then(|start| {
+            let open = html[start..].find('>')? + start + 1;
+            let close = lower[open..].find("</title>")? + open;
+            let title = unescape(html[open..close].trim());
+            let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!title.is_empty()).then_some(title)
+        })
+    };
+    let site_name = site
+        .captures(html)
+        .and_then(|c| c.get(1))
+        .map(|m| unescape(m.as_str().trim()));
+    // The article, or the main element, or the body.
+    let pick = |open: &str, close: &str| -> Option<&str> {
+        let start = lower.find(open)?;
+        let end = lower.rfind(close)?;
+        (end > start).then(|| &html[start..end])
+    };
+    let mut part = pick("<article", "</article>")
+        .or_else(|| pick("<main", "</main>"))
+        .or_else(|| pick("<body", "</body>"))
+        .unwrap_or(html)
+        .to_owned();
+    for pattern in noise {
+        part = pattern.replace_all(&part, " ").into_owned();
+    }
+    let part = block.replace_all(&part, "\n");
+    let part = tag.replace_all(&part, "");
+    let lines: Vec<String> = unescape(&part)
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let text = blank
+        .replace_all(&lines.join("\n"), "\n\n")
+        .trim()
+        .to_owned();
+    Page {
+        title,
+        site: site_name,
+        text: text.chars().take(20_000).collect(),
+    }
+}
+
 fn unescape(text: &str) -> String {
     text.replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -316,6 +575,14 @@ fn unescape(text: &str) -> String {
         .replace("&#39;", "'")
         .replace("&#x27;", "'")
         .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&rsquo;", "’")
+        .replace("&lsquo;", "‘")
+        .replace("&ldquo;", "“")
+        .replace("&rdquo;", "”")
+        .replace("&hellip;", "…")
 }
 
 /// After a link capture is saved: the page's own title and description go into the note, if
@@ -448,6 +715,45 @@ pub fn hashtags(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_is_read_without_its_chrome() {
+        let html = "<html><head><title>Lag &amp; you</title><meta property=\"og:site_name\" content=\"Ex\"></head><body><nav>Home | About</nav><article><h1>Lag</h1><p>Lag grows when<br>consumers stall.</p><script>alert(1)</script><p>Second.</p></article><footer>(c)</footer></body></html>";
+        let page = html_to_page(html);
+        assert_eq!(page.title.as_deref(), Some("Lag & you"));
+        assert_eq!(page.site.as_deref(), Some("Ex"));
+        assert!(
+            page.text.contains("Lag grows when\nconsumers stall."),
+            "{}",
+            page.text
+        );
+        assert!(page.text.contains("Second."));
+        assert!(
+            !page.text.contains("alert")
+                && !page.text.contains("About")
+                && !page.text.contains("(c)")
+        );
+    }
+
+    #[test]
+    fn meta_refresh_targets_are_made_absolute() {
+        let html = "<noscript><meta http-equiv=\"refresh\" content=\"0; url=https://b.example/x/\"></noscript>";
+        assert_eq!(
+            meta_refresh(html, "https://a.example/y").as_deref(),
+            Some("https://b.example/x/")
+        );
+        let html = "<meta http-equiv='refresh' content='0;URL=/new/page'>";
+        assert_eq!(
+            meta_refresh(html, "https://a.example/old/p.html").as_deref(),
+            Some("https://a.example/new/page")
+        );
+        let html = "<meta http-equiv=refresh content=\"5; url=next.html\">";
+        assert_eq!(
+            meta_refresh(html, "https://a.example/d/p.html").as_deref(),
+            Some("https://a.example/d/next.html")
+        );
+        assert_eq!(meta_refresh("<p>no</p>", "https://a.example"), None);
+    }
     use crate::frontmatter;
 
     #[test]

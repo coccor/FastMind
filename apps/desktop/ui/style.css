@@ -115,7 +115,11 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .md blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--muted); }
 .md code { font: 12.5px ui-monospace, monospace; background: var(--bg); border-radius: 4px; padding: 1px 4px; }
 .md pre { background: var(--bg); padding: 10px; border-radius: 8px; overflow: auto; }
-.md .front { font: 12px ui-monospace, monospace; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; margin-bottom: 12px; }
+.md .front { font: 12px ui-monospace, monospace; color: var(--muted); margin-bottom: 12px; }
+.md .front summary { cursor: pointer; font: 12px system-ui, sans-serif; width: max-content; }
+.md .front .front-text { background: var(--bg); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; margin-top: 6px; }
+.settings label.stack { flex-direction: column; align-items: stretch; gap: 6px; }
+.settings label.stack textarea { width: 100%; box-sizing: border-box; font: inherit; }
 .md .wikilink { color: var(--accent); }
 
 /* Cards */
@@ -242,3 +246,14 @@ legend { font-weight: 650; padding: 0 6px; }
 @media (prefers-color-scheme: dark) {
   button.primary, .badge { color: #14121f; }
 }
+
+/* The writing step */
+.spinner { display: inline-block; width: 0.8em; height: 0.8em; border: 2px solid var(--muted, #888); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+.writing-line { color: var(--accent, #4a7); font-size: 0.85em; margin: 4px 0; }
+.inbox-card.is-writing .reason { opacity: 0.6; }
+.written { color: var(--accent, #4a7); font-size: 0.8em; cursor: help; }
+.write-failed { color: var(--warn, #b60); margin: 4px 0; }
+.original { border-left: 3px solid var(--line); padding: 6px 10px; margin: 8px 0; background: var(--panel, transparent); }
+.original pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0; font: inherit; }

@@ -70,6 +70,25 @@ In **Settings › Model** choose **Local server** (with Ollama running: `ollama 
 each topic note, and Remember writes its answers in prose, citing notes as [1], [2]. If the
 model can't be reached, both fall back to the offline way and say so.
 
+## 5b. Captures written into finished notes
+
+1. In **Settings › Model** choose **Claude Code (uses your Claude plan)**. Leave "Write each
+   capture into a finished note" on. Optionally say how you like notes written ("Always in
+   English. Short.").
+2. Capture something rough: `standup: Mara says the EU invoices batch moved to 02:00 UTC
+   because of the bank's new cutoff. need to update the runbook and tell support`.
+3. The toast says "Saved. Writing it up in the background…". In **Inbox** the card shows
+   "Writing the note from what you captured…" and, a few seconds later, becomes **EU invoices
+   batch moved to 02:00 UTC ✦** with a summary, key points, two tasks, a link to
+   `[[Payments service]]` and "File in ❖ Work" with the model's reason.
+4. Capture a link with a comment, or a screenshot of an error with "after the deploy". The
+   model reads the page (redirect pages are followed) or the image, and says so in the note
+   when something couldn't be read rather than inventing it.
+5. **Read** the note: **Original** shows what you captured, as you gave it. **Write again**
+   writes it afresh (even after you edited it); **History** undoes that.
+6. Edit a captured note before the model is done: your edit wins, and the note is left as you
+   wrote it.
+
 ## 6. File the inbox in a few keystrokes
 
 1. Open **Inbox**. Each note shows where it probably belongs, from the notes it's most like:

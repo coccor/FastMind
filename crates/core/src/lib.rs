@@ -20,6 +20,7 @@ pub mod sessions;
 pub mod setup;
 pub mod text;
 pub mod usage;
+pub mod write;
 
 pub use notebook::{Note, Notebook};
 

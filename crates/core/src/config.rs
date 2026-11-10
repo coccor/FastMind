@@ -25,6 +25,8 @@ pub struct Settings {
     pub fetch_link_titles: bool,
     /// Learn from AI sessions (off until chosen).
     pub ai: crate::sessions::AiSettings,
+    /// The second step of a capture: a model writes the note.
+    pub writing: crate::write::WritingSettings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -77,6 +79,7 @@ impl Default for Settings {
             autostart: false,
             fetch_link_titles: true,
             ai: crate::sessions::AiSettings::default(),
+            writing: crate::write::WritingSettings::default(),
         }
     }
 }

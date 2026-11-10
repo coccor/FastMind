@@ -129,7 +129,8 @@ function renderMarkdown(text) {
   }
   if (code !== null) out.push("<pre><code>" + esc(code) + "</code></pre>");
   flush();
-  return (front ? `<div class="front">${esc(front)}</div>` : "") + out.join("\n");
+  // Properties stay out of the way: folded, opened on demand.
+  return (front ? `<details class="front"><summary>Properties</summary><div class="front-text">${esc(front)}</div></details>` : "") + out.join("\n");
 }
 
 // ---------- navigation ----------
@@ -301,16 +302,65 @@ async function readNote(path, archivedId) {
     reader.hidden = false;
     reader._note = note;
     reader.innerHTML = `<div class="reader-head"><h2>${esc(note.title)}</h2>
-        <span class="reader-actions"><button id="edit-note" title="Edit (Ctrl+E)">Edit</button><button id="open-editor" title="Open in your editor">Open</button><button id="close-reader" title="Close">✕</button></span></div>
+        <span class="reader-actions">${note.capture_id ? `<button id="write-note" title="Write the note again from what you captured; History can undo it">${note.written_by ? "Write again" : "Write"}</button><button id="show-original" title="What you captured, as you gave it">Original</button>` : ""}<button id="edit-note" title="Edit (Ctrl+E)">Edit</button><button id="open-editor" title="Open in your editor">Open</button><button id="close-reader" title="Close">✕</button></span></div>
       <div class="muted small">${esc(note.path)}</div>
+      ${note.writing ? `<div class="writing-line"><span class="spinner"></span> Being written from what you captured…</div>` : ""}
+      <div class="original" id="original" hidden></div>
       <div class="md" id="reader-body">${renderMarkdown(note.text)}</div>
       <div class="related" id="related"></div>`;
     $("#open-editor").addEventListener("click", () => openInEditor(path));
     $("#edit-note").addEventListener("click", () => editNote());
+    $("#write-note")?.addEventListener("click", async (event) => {
+      const done = await writeNote(path, event.currentTarget);
+      if (done) readNote(done.path);
+    });
+    $("#show-original")?.addEventListener("click", () => showOriginal(path));
+    // The title is in the header already.
+    const heading = reader.querySelector("#reader-body > h1");
+    if (heading && heading.textContent.trim() === note.title.trim()) heading.remove();
     $("#close-reader").addEventListener("click", () => { reader.hidden = true; selected = null; });
     wireLinks(reader);
     loadImages(reader, path);
     loadRelated(path);
+  } catch (error) {
+    toast(String(error.message || error), true);
+  }
+}
+
+// The second step of a capture: the model writes the note from what was captured.
+async function writeNote(path, button) {
+  const status = await call("status").catch(() => ({}));
+  if (!status.model_on) {
+    toast("Choose a model in Settings to write notes (Claude Code uses your Claude plan).", true);
+    return null;
+  }
+  const label = button?.textContent;
+  if (button) { button.disabled = true; button.innerHTML = `<span class="spinner"></span> Writing…`; }
+  try {
+    const done = await call("rewrite_note", { path });
+    toast(`Wrote "${done.title}". History can undo it.`);
+    refreshStatus();
+    return done;
+  } catch (error) {
+    toast(String(error.message || error), true);
+    return null;
+  } finally {
+    if (button && button.isConnected) { button.disabled = false; button.textContent = label; }
+  }
+}
+
+async function showOriginal(path) {
+  const box = $("#original");
+  if (!box.hidden) { box.hidden = true; return; }
+  try {
+    const raw = await call("capture_original", { path });
+    const files = (raw.attachments || []).map((a) => `<li>${esc(a.split("/").pop())}</li>`).join("");
+    box.innerHTML = `<div class="muted small">Captured ${esc(raw.captured.replace("T", " "))}${raw.written_by ? ` · written by ${esc(raw.written_by)}` : " · not written by a model"}</div>
+      ${raw.text.trim() ? `<pre>${esc(raw.text)}</pre>` : ""}
+      ${raw.url ? `<div class="small">Link: ${esc(raw.url)}</div>` : ""}
+      ${files ? `<div class="small">Attached:</div><ul class="small">${files}</ul>` : ""}
+      ${raw.failed ? `<div class="write-failed small">Last try: ${esc(raw.failed)}</div>` : ""}`;
+    box.hidden = false;
   } catch (error) {
     toast(String(error.message || error), true);
   }
@@ -394,8 +444,12 @@ function editNote() {
 // ---------- Inbox ----------
 let folderList = [];
 
+let inboxPoll = null;
+
 async function loadInbox() {
   const list = $("#inbox-list");
+  clearTimeout(inboxPoll);
+  const focusedPath = list.querySelector(".inbox-card.focused")?.dataset.path;
   try {
     const notes = await call("inbox");
     if (!notes.length) {
@@ -403,19 +457,23 @@ async function loadInbox() {
       return;
     }
     list.innerHTML = notes
-      .map((n, i) => `<li class="card inbox-card${i === 0 ? " focused" : ""}" tabindex="0" data-path="${esc(n.path)}">
+      .map((n, i) => `<li class="card inbox-card${n.writing ? " is-writing" : ""}${(focusedPath ? n.path === focusedPath : i === 0) ? " focused" : ""}" tabindex="0" data-path="${esc(n.path)}">
         <div class="card-head"><div class="grow">
-          <div class="title">${esc(n.title)}</div>
+          <div class="title">${esc(n.title)}${n.written_by ? ` <span class="written" title="Written by ${esc(n.written_by)} from what you captured">✦</span>` : ""}</div>
+          ${n.writing ? `<div class="writing-line"><span class="spinner"></span> Writing the note from what you captured…</div>` : ""}
           <div class="reason">${esc(unlink(n.snippet))}</div>
+          ${n.write_failed && !n.writing && !n.written_by ? `<div class="write-failed small">Kept as you typed it: ${esc(n.write_failed)} <button class="chip" data-act="write">Try again</button></div>` : ""}
           <div class="meta"><span>${esc(ago(n.captured))}</span>${(n.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
-          <div class="homes" data-loading="1"><span class="muted small">Finding where it belongs…</span></div>
+          <div class="homes" data-loading="1"><span class="muted small">${n.writing ? "" : "Finding where it belongs…"}</span></div>
         </div><div class="actions">
-          <button data-act="read" title="Read (R)">Read</button><button data-act="keep" title="Keep in the inbox, off this list (K)">Keep</button><button data-act="archive" title="Archive (A)">Archive</button>
+          <button data-act="read" title="Read (R)">Read</button>${n.can_write && !n.writing && !n.written_by && !n.write_failed ? `<button data-act="write" title="Write the note from what you captured (W)">Write</button>` : ""}<button data-act="keep" title="Keep in the inbox, off this list (K)">Keep</button><button data-act="archive" title="Archive (A)">Archive</button>
         </div></div></li>`)
       .join("");
+    // While the model writes, check back: the card turns into the written note.
+    if (notes.some((n) => n.writing)) inboxPoll = setTimeout(() => current === "inbox" && loadInbox(), 2000);
     call("folders").then((folders) => (folderList = folders)).catch(() => {});
-    for (const card of list.querySelectorAll(".inbox-card")) loadHomes(card);
-    list.querySelector(".inbox-card")?.focus();
+    for (const card of list.querySelectorAll(".inbox-card:not(.is-writing)")) loadHomes(card);
+    if (!list.contains(document.activeElement) || document.activeElement === list) list.querySelector(".inbox-card.focused")?.focus();
   } catch (error) {
     list.innerHTML = `<li class="empty">${esc(error.message || error)}</li>`;
   }
@@ -427,9 +485,10 @@ async function loadHomes(card) {
     const homes = await call("suggest_homes", { path: card.dataset.path });
     const chip = (h, primary) => `<button class="${primary ? "primary file-best" : "chip"}" data-act="file" data-kind="${esc(h.kind)}" data-target="${esc(h.target)}"
         title="${h.because.length ? "Beside " + esc(h.because.join(", ")) : ""}">${primary ? "File in " : ""}${h.kind === "note" ? "❖ " : "▸ "}${esc(h.label)}</button>`;
+    const why = (h) => h.score > 1e30 ? h.because.join(" ") : "Beside " + h.because.join(", ");
     box.innerHTML = (homes.length ? chip(homes[0], true) + homes.slice(1).map((h) => chip(h, false)).join("") : `<span class="muted small">No obvious home yet.</span>`)
       + ` <button class="chip" data-act="other">Other folder…</button>`
-      + (homes.length && homes[0].because.length ? `<div class="muted small why">Beside ${esc(homes[0].because.join(", "))}</div>` : "");
+      + (homes.length && homes[0].because.length ? `<div class="muted small why">${esc(why(homes[0]))}</div>` : "");
   } catch {
     box.innerHTML = `<button class="chip" data-act="other">File in a folder…</button>`;
   }
@@ -471,6 +530,7 @@ $("#inbox-list").addEventListener("click", async (event) => {
   try {
     const act = button.dataset.act;
     if (act === "read") { show("remember"); readNote(path); return; }
+    if (act === "write") { await writeNote(path, button); loadInbox(); return; }
     if (act === "file") { await fileCard(card, button.dataset.kind, button.dataset.target); return; }
     if (act === "other") { askFolder(card); return; }
     if (act === "cancel-other") { loadHomes(card); return; }
@@ -502,6 +562,7 @@ $("#inbox-list").addEventListener("keydown", (event) => {
   else if (key === "k") card.querySelector('[data-act="keep"]').click();
   else if (key === "a") card.querySelector('[data-act="archive"]').click();
   else if (key === "r") card.querySelector('[data-act="read"]').click();
+  else if (key === "w") card.querySelector('[data-act="write"]')?.click();
   else if (key === "f" || key === "o") { event.preventDefault(); askFolder(card); }
 });
 
@@ -745,6 +806,9 @@ async function loadSettings() {
     form.provider.value = settings.model.provider || "none";
     form.model.value = settings.model.model || "";
     form.base_url.value = settings.model.base_url || "";
+    form.write_enabled.checked = settings.writing.enabled;
+    form.write_instructions.value = settings.writing.instructions || "";
+    showModelFields(form);
     form._settings = settings;
   } catch (error) {
     toast(String(error.message || error), true);
@@ -778,7 +842,9 @@ $("#settings-form").addEventListener("submit", async (event) => {
   s.model =
     provider === "none" ? { provider: "none" }
     : provider === "local" ? { provider: "local", model: form.model.value.trim() || "llama3.2", base_url: form.base_url.value.trim() || "http://localhost:11434/v1" }
+    : provider === "claude-code" ? { provider: "claude-code", model: form.model.value.trim() || "sonnet" }
     : { provider: "claude", model: form.model.value.trim() || "claude-opus-5-5" };
+  s.writing = { enabled: form.write_enabled.checked, instructions: form.write_instructions.value };
   try {
     await call("settings_set", { settings: s });
     $("#settings-saved").textContent = "Saved.";
@@ -787,6 +853,20 @@ $("#settings-form").addEventListener("submit", async (event) => {
   } catch (error) {
     toast(String(error.message || error), true);
   }
+});
+
+// Only the fields the chosen provider uses, with its own default model as the hint.
+function showModelFields(form) {
+  const provider = form.provider.value;
+  form.model.closest("label").hidden = provider === "none";
+  form.base_url.closest("label").hidden = provider !== "local";
+  form.model.placeholder = { local: "llama3.2", claude: "claude-opus-5-5", "claude-code": "sonnet" }[provider] || "";
+  $("#writing-fields").hidden = provider === "none";
+}
+$("#settings-form").provider.addEventListener("change", (event) => {
+  const form = event.target.form;
+  form.model.value = "";
+  showModelFields(form);
 });
 
 $("#settings-form").addEventListener("click", async (event) => {
@@ -887,7 +967,7 @@ async function saveCapture(text, files = []) {
   if (!text.trim() && !files.length) return false;
   try {
     const saved = await call("capture", { text, files });
-    toast(`Saved "${saved.title}"`);
+    toast(saved.writing ? "Saved. Writing it up in the background…" : `Saved "${saved.title}"`);
     refreshStatus();
     if (current === "inbox") loadInbox();
     if (current === "home") loadHome();
