@@ -82,7 +82,7 @@ Never proposed: "Work" (a `type: project` home note) and "Reading list" (`pin: t
    Short.").
 2. Capture something rough: `standup: Mara says the EU invoices batch moved to 02:00 UTC
    because of the bank's new cutoff. need to update the runbook and tell support`.
-3. The toast says "Saved. Writing it up in the background…". In **Inbox** the card shows
+3. The toast says "Saved as a fresh memory. Writing it up…". In **Fresh memories** the card shows
    "Writing the note from what you captured…" and, a few seconds later, becomes **EU invoices
    batch moved to 02:00 UTC ✦** with a summary, key points, two tasks, a link to
    `[[Payments service]]` and "File in ❖ Work" with the model's reason.
@@ -94,13 +94,14 @@ Never proposed: "Work" (a `type: project` home note) and "Reading list" (`pin: t
 6. Edit a captured note before the model is done: your edit wins, and the note is left as you
    wrote it.
 
-## 6. File the inbox in a few keystrokes
+## 6. Settle a fresh memory now, if you want
 
-1. Open **Inbox**. Each note shows where it probably belongs, from the notes it's most like:
+1. Open **Fresh memories**. Each note shows where it probably belongs, from the notes it's most like:
    "File in ▸ ideas/", with "Beside Docker build cache" as the reason. A topic note is offered
    with ❖.
 2. Press **Enter** to file the first note there. The next note is selected. **F** files in
-   another folder (new folders are made), **K** keeps a note in the inbox, **A** archives it.
+   another folder (new folders are made), **K** keeps a note where it is so Dream won't move it, **A** archives it. Left alone, each
+   one settles overnight.
 3. Filing into a topic note moves the note beside it and adds `- [[the note]]` to its
    `## Notes` list. **History** can undo either.
 
@@ -125,7 +126,7 @@ Never proposed: "Work" (a `type: project` home note) and "Reading list" (`pin: t
 2. In a Claude Code session ask "search my notes for the ledger lag". It calls `search_notes`
    and reads the note.
 3. When the agent finds something worth keeping, it calls `save_finding`. The finding lands in
-   your inbox tagged `agent`, with secrets removed.
+   your fresh memories tagged `agent`, with secrets removed.
 
 ## 9. The first run
 

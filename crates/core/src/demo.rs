@@ -52,7 +52,7 @@ const SEEDS: &[Seed] = &[
         body: "# Redis eviction policy\n\nWhen maxmemory is reached Redis evicts keys according to maxmemory-policy. Use allkeys-lru for a pure cache and volatile-lru when some keys must never be evicted.\n\nSet maxmemory explicitly in production; the default of 0 means no limit on 64-bit systems.\n",
     },
     Seed {
-        path: "inbox/Redis eviction.md",
+        path: "Fresh memories/Redis eviction.md",
         days_ago: 25,
         front: "type: capture\nstatus: inbox\ntags: [cache]",
         body: "# Redis eviction\n\nWhen maxmemory is reached Redis evicts keys according to maxmemory-policy. Use allkeys-lru for a pure cache and volatile-lru when some keys must never be evicted.\n\nWatch evicted_keys in INFO stats to see whether eviction is happening at all.\n",
@@ -65,26 +65,26 @@ const SEEDS: &[Seed] = &[
         body: "# Docker build cache\n\nCopy the dependency manifests first and install dependencies before copying the source, so a code change doesn't throw away the dependency layer of the build cache.\n",
     },
     Seed {
-        path: "inbox/Faster docker builds.md",
+        path: "Fresh memories/Faster docker builds.md",
         days_ago: 15,
         front: "type: capture\nstatus: inbox",
         body: "# Faster docker builds\n\nCopy the dependency manifests first and install dependencies before copying the source, so a code change doesn't throw away the dependency layer of the build cache.\n\nAlso: BuildKit cache mounts (`--mount=type=cache`) keep the package cache between builds.\n",
     },
     Seed {
-        path: "inbox/docker layer caching.md",
+        path: "Fresh memories/docker layer caching.md",
         days_ago: 9,
         front: "type: capture\nstatus: inbox",
         body: "# docker layer caching\n\ncopy the dependency manifests first and install dependencies before copying the source so a code change doesn't throw away the dependency layer of the build cache\n",
     },
     // Fragments of one subject, captured on different days.
     Seed {
-        path: "inbox/Readiness probe.md",
+        path: "Fresh memories/Readiness probe.md",
         days_ago: 18,
         front: "type: capture\nstatus: inbox\ntags: [kubernetes]",
         body: "# Readiness probe\n\nKubernetes readiness probes decide whether a pod gets traffic. A failing readiness probe takes the pod out of the service.\n",
     },
     Seed {
-        path: "inbox/Liveness probe restarts.md",
+        path: "Fresh memories/Liveness probe restarts.md",
         days_ago: 16,
         front: "type: capture\nstatus: inbox\ntags: [kubernetes]",
         body: "# Liveness probe restarts\n\nA failing liveness probe makes Kubernetes restart the pod. Too strict a probe causes restart loops under load.\n",
@@ -96,7 +96,7 @@ const SEEDS: &[Seed] = &[
         body: "# Startup probe\n\nSlow-starting pods need a startup probe so the liveness probe doesn't kill them before they're up. Kubernetes holds the other probes until it passes.\n",
     },
     Seed {
-        path: "inbox/probe timeouts.md",
+        path: "Fresh memories/probe timeouts.md",
         days_ago: 11,
         front: "type: capture\nstatus: inbox",
         body: "# probe timeouts\n\nKubernetes probe timeoutSeconds defaults to 1 second; slow health endpoints fail the probe and the pod restarts.\n",
@@ -128,7 +128,7 @@ const SEEDS: &[Seed] = &[
         body: "# Migrate CI to GitHub Actions\n\n- [x] Port the build job\n- [x] Port the release job\n- [x] Turn off the old CI server\n",
     },
     Seed {
-        path: "inbox/Conference wifi.md",
+        path: "Fresh memories/Conference wifi.md",
         days_ago: 400,
         front: "type: capture\nstatus: inbox",
         body: "# Conference wifi\n\nNetwork DevConf-Guest, password on the badge.\n",

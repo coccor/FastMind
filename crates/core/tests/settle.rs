@@ -72,7 +72,7 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
     // The model suggested a home note, and a folder.
     write(
         &nb,
-        "inbox/Invoices batch.md",
+        "Fresh memories/Invoices batch.md",
         &inbox(
             "Invoices batch",
             "suggested_home: \"[[Work]]\"\nsuggested_because: Ops work.\n",
@@ -82,7 +82,7 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
     );
     write(
         &nb,
-        "inbox/Vacuum tuning.md",
+        "Fresh memories/Vacuum tuning.md",
         &inbox(
             "Vacuum tuning",
             "suggested_home: work/db/\n",
@@ -93,7 +93,7 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
     // No suggestion: its neighbours decide.
     write(
         &nb,
-        "inbox/Rye in the starter.md",
+        "Fresh memories/Rye in the starter.md",
         &inbox(
             "Rye in the starter",
             "",
@@ -104,13 +104,13 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
     // Too new, and nowhere obvious: both wait.
     write(
         &nb,
-        "inbox/Fresh.md",
+        "Fresh memories/Fresh.md",
         &inbox("Fresh", "suggested_home: \"[[Work]]\"\n", "Just captured."),
         1,
     );
     write(
         &nb,
-        "inbox/Odd one.md",
+        "Fresh memories/Odd one.md",
         &inbox("Odd one", "", "Zebra quantum lighthouse."),
         10,
     );
@@ -134,28 +134,28 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
             .find(|p| p.notes.contains(&path.to_owned()))
             .copied()
     };
-    let to_work = find("inbox/Invoices batch.md").expect("the model's home note is used");
+    let to_work = find("Fresh memories/Invoices batch.md").expect("the model's home note is used");
     assert!(matches!(&to_work.plan, Plan::Settle { home: Some(h), .. } if h == "work/Work.md"));
     assert!(to_work.reason.contains("Ops work."), "{}", to_work.reason);
-    let to_db = find("inbox/Vacuum tuning.md").expect("the model's folder is used");
+    let to_db = find("Fresh memories/Vacuum tuning.md").expect("the model's folder is used");
     assert!(matches!(&to_db.plan, Plan::Settle { folder: Some(f), .. } if f == "work/db"));
     let to_kitchen =
-        find("inbox/Rye in the starter.md").expect("neighbours decide without a model");
+        find("Fresh memories/Rye in the starter.md").expect("neighbours decide without a model");
     assert!(
         matches!(&to_kitchen.plan, Plan::Settle { folder: Some(f), .. } if f == "kitchen"),
         "{:?}",
         to_kitchen.plan
     );
     assert!(
-        find("inbox/Fresh.md").is_none(),
+        find("Fresh memories/Fresh.md").is_none(),
         "captured an hour ago: not yet"
     );
     assert!(
-        find("inbox/Odd one.md").is_none(),
+        find("Fresh memories/Odd one.md").is_none(),
         "no clear home: it stays new"
     );
     assert!(
-        report.summary.contains("3 new memories to settle"),
+        report.summary.contains("3 fresh memories to settle"),
         "{}",
         report.summary
     );
@@ -172,7 +172,7 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
     assert!(nb.exists("work/Invoices batch.md"));
     assert!(nb.exists("work/db/Vacuum tuning.md"));
     assert!(nb.exists("kitchen/Rye in the starter.md"));
-    assert!(nb.exists("inbox/Fresh.md") && nb.exists("inbox/Odd one.md"));
+    assert!(nb.exists("Fresh memories/Fresh.md") && nb.exists("Fresh memories/Odd one.md"));
     let work = fs::read_to_string(nb.root.join("work/Work.md")).unwrap();
     assert!(
         work.contains("- [[Invoices batch]]"),
@@ -187,7 +187,10 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
     for entry in journal::history(&nb).into_iter().filter(|e| !e.undone) {
         journal::undo(&nb, &entry.id).unwrap();
     }
-    assert!(nb.exists("inbox/Invoices batch.md") && nb.exists("inbox/Vacuum tuning.md"));
+    assert!(
+        nb.exists("Fresh memories/Invoices batch.md")
+            && nb.exists("Fresh memories/Vacuum tuning.md")
+    );
     assert!(
         !fs::read_to_string(nb.root.join("work/Work.md"))
             .unwrap()

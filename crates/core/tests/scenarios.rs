@@ -65,7 +65,7 @@ fn capture_then_find_and_ask() {
         .unwrap();
     assert_eq!(
         saved["path"],
-        "inbox/Flaky test in checkout the payment mock times out after 2s on CI.md"
+        "Fresh memories/Flaky test in checkout the payment mock times out after 2s on CI.md"
     );
 
     let hits = app
@@ -185,7 +185,7 @@ fn dream_compresses_a_messy_notebook() {
     let hits = app
         .call("search", json!({ "query": "conference wifi password" }))
         .unwrap();
-    assert_eq!(hits[0]["path"], "inbox/Conference wifi.md");
+    assert_eq!(hits[0]["path"], "Fresh memories/Conference wifi.md");
     assert!(!hits[0]["archived"].is_null());
 
     // A second night finds nothing more to do.
@@ -213,10 +213,10 @@ fn any_dream_change_can_be_undone_on_its_own() {
     let paths = note_paths(&root);
     assert!(!paths.contains(&"ideas/Kubernetes probe.md".to_owned()));
     for fragment in [
-        "inbox/Readiness probe.md",
-        "inbox/Liveness probe restarts.md",
+        "Fresh memories/Readiness probe.md",
+        "Fresh memories/Liveness probe restarts.md",
         "ideas/Startup probe.md",
-        "inbox/probe timeouts.md",
+        "Fresh memories/probe timeouts.md",
     ] {
         assert!(
             paths.contains(&fragment.to_owned()),
@@ -224,7 +224,7 @@ fn any_dream_change_can_be_undone_on_its_own() {
         );
     }
     // Everything else Dream did stays done.
-    assert!(!paths.contains(&"inbox/Redis eviction.md".to_owned()));
+    assert!(!paths.contains(&"Fresh memories/Redis eviction.md".to_owned()));
     let history = app.call("history", json!({})).unwrap();
     let blocked: Vec<&Value> = history
         .as_array()

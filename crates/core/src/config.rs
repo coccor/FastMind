@@ -75,7 +75,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             notebook: None,
-            inbox: "inbox".into(),
+            inbox: "Fresh memories".into(),
             hotkeys: Hotkeys::default(),
             dream: DreamSettings::default(),
             model: ModelSettings::None,

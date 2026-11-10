@@ -99,7 +99,7 @@ pub struct Places {
 impl Default for Places {
     fn default() -> Self {
         Self {
-            inbox: "inbox".into(),
+            inbox: "Fresh memories".into(),
             ai_folder: "AI sessions".into(),
             preferences: String::new(),
         }
@@ -1081,7 +1081,7 @@ pub fn run_in(
         }
     }
 
-    // 5. Settle: new memories go where they belong, the way sleep consolidates the day. The
+    // 5. Settle: fresh memories go where they belong, the way sleep consolidates the day. The
     //    home the model suggested when it wrote the note comes first; else the folder (or
     //    home note) holding the notes most like it, when at least two agree. A note with no
     //    clear home stays new.
@@ -1276,7 +1276,7 @@ pub fn run_in(
                 title: if count == 1 {
                     format!("Settle {} in {place}", titles[0])
                 } else {
-                    format!("Settle {count} new memories in {place}")
+                    format!("Settle {count} fresh memories in {place}")
                 },
                 reason: format!(
                     "{}. {}",
@@ -1571,7 +1571,7 @@ fn summarize(before: &Totals, proposals: &[Proposal]) -> String {
         .sum();
     if settled > 0 {
         parts.push(format!(
-            "{settled} new memor{} to settle",
+            "{settled} fresh memor{} to settle",
             if settled == 1 { "y" } else { "ies" }
         ));
     }

@@ -65,9 +65,10 @@ fn an_agent_can_search_and_save_findings() {
     assert_eq!(replies[3]["result"]["isError"], false);
     assert_eq!(replies[4]["error"]["code"], -32601);
 
-    let saved =
-        std::fs::read_to_string(notebook.join("inbox/Index posted_at to fix the ledger lag.md"))
-            .unwrap();
+    let saved = std::fs::read_to_string(
+        notebook.join("Fresh memories/Index posted_at to fix the ledger lag.md"),
+    )
+    .unwrap();
     assert!(
         saved.contains("tags: [agent]") && !saved.contains("hunter22"),
         "{saved}"

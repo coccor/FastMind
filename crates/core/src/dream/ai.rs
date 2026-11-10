@@ -2,7 +2,7 @@
 //! thousands of notes costs a few dozen model requests a night. The model decides: which notes
 //! really say the same thing and how the merged note reads, whether scattered notes make one
 //! subject and what the topic note says, whether an old note is still worth keeping, which note
-//! a broken link meant, and where a new memory belongs.
+//! a broken link meant, and where a fresh memory belongs.
 //!
 //! Verdicts are cached by the notes' content, so a night with nothing new asks nothing again.
 
@@ -491,7 +491,7 @@ pub fn links(
 
 // ---- Settling ----
 
-/// A new memory and the places it could settle.
+/// A fresh memory and the places it could settle.
 pub struct Unsettled<'n> {
     pub note: &'n Note,
     /// Home notes, by name.
@@ -513,7 +513,7 @@ fn settle_schema() -> Value {
     })
 }
 
-/// Where each new memory in `batch` belongs: `(index, is_home, name, reason)`.
+/// Where each fresh memory in `batch` belongs: `(index, is_home, name, reason)`.
 pub fn homes(
     judge: &Judge,
     batch: &[Unsettled],

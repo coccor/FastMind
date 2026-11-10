@@ -112,6 +112,10 @@ text exactly as previewed, only while they're unchanged; otherwise it's *out of 
   listing's sizes and times: about 13 ms for 5,000 notes when nothing changed, and only changed
   files are read. Dream compares only pairs that share one of their strongest words, and looks
   for link fixes among names with the same first letter.
+- **Fresh memories.** New captures are saved in the notebook's capture folder (`Fresh
+  memories/` for new notebooks; `settings.inbox`, which existing notebooks keep, such as
+  FastCapture's `inbox`) with `status: inbox`. The app calls them fresh memories, shows no
+  count to clear, and Dream's Settle step moves them overnight.
 - **Writing captures** (`write.rs`), FastCapture's two steps. Step one saves the note as typed
   and keeps the capture itself in `.fastmind/raw/<id>.json` (text, link, tags, stored files,
   the note's path and hash); the note carries `capture_id`. Step two, on a background thread,

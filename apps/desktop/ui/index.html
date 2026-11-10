@@ -11,7 +11,7 @@
   <!-- The small capture window (opened by the capture hotkey) uses only this part. -->
   <section id="capture-only" class="capture-only" hidden>
     <form id="capture-form-mini" class="capture-box">
-      <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ inbox</span></div>
+      <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ Fresh memories</span></div>
       <textarea id="capture-text-mini" placeholder="What do you want to keep? A thought, a link, a fix… #tags work. Paste or drop screenshots and files." autofocus></textarea>
       <div class="attachments" id="capture-files-mini" hidden></div>
       <div class="capture-footer">
@@ -56,7 +56,7 @@
       <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span>FastMind</span></div>
       <button class="nav" data-view="home"><span class="ico">⌂</span>Home</button>
       <button class="nav" data-view="remember"><span class="ico">⌕</span>Remember</button>
-      <button class="nav" data-view="inbox"><span class="ico">✎</span>Inbox <span class="badge" id="badge-inbox"></span></button>
+      <button class="nav" data-view="inbox"><span class="ico">✎</span>Fresh memories <span class="badge" id="badge-inbox"></span></button>
       <button class="nav" data-view="dream"><span class="ico">☾</span>Dream <span class="badge" id="badge-dream"></span></button>
       <button class="nav" data-view="archive"><span class="ico">▤</span>Archive</button>
       <button class="nav" data-view="history"><span class="ico">↶</span>History</button>
@@ -72,7 +72,7 @@
       <section class="view" id="view-home" hidden>
         <header class="view-head"><h1 id="home-greeting">Good morning</h1><p class="muted" id="home-line"></p></header>
         <form id="home-capture" class="home-capture">
-          <textarea id="home-capture-text" placeholder="What's on your mind? Ctrl+Enter saves it to the inbox. #tags work; paste or drop screenshots and files."></textarea>
+          <textarea id="home-capture-text" placeholder="What's on your mind? Ctrl+Enter saves it as a fresh memory. #tags work; paste or drop screenshots and files."></textarea>
           <div class="attachments" id="home-capture-files" hidden></div>
           <div class="row gap"><button class="primary" type="submit">Save</button><span class="muted small">Or press the capture key from anywhere.</span></div>
         </form>
@@ -104,9 +104,9 @@
       <!-- Inbox -->
       <section class="view" id="view-inbox" hidden>
         <header class="view-head">
-          <h1>Inbox</h1>
-          <p class="muted">What you captured and haven't filed yet. FastMind suggests where each note belongs, from the notes it's most like.
-            <kbd>Enter</kbd> files it there · <kbd>F</kbd> another folder · <kbd>K</kbd> keep · <kbd>A</kbd> archive · <kbd>↑</kbd><kbd>↓</kbd> move</p>
+          <h1>Fresh memories</h1>
+          <p class="muted">What you captured, written up. Fresh memories settle overnight: Dream moves each one where it belongs; nothing here needs you.
+            To settle one now: <kbd>Enter</kbd> where it's suggested · <kbd>F</kbd> another folder · <kbd>K</kbd> keep it where it is · <kbd>A</kbd> archive · <kbd>↑</kbd><kbd>↓</kbd> move</p>
         </header>
         <ul id="inbox-list" class="cards"></ul>
       </section>
@@ -157,7 +157,7 @@
           <fieldset>
             <legend>Notebook</legend>
             <label>Folder <input name="notebook" placeholder="~/FastMind"></label>
-            <label>Captures go to <input name="inbox"></label>
+            <label>Fresh memories are saved in <input name="inbox"></label>
             <div class="row gap">
               <button type="button" id="make-demo">Try a demo notebook</button>
               <span class="muted small">Makes a messy notebook beside your home folder (FastMind Demo) and switches to it.</span>
@@ -180,7 +180,7 @@
             <label>Keep undo for <input name="undo_days" type="number" min="1" class="tiny"> days</label>
             <div class="checks">
               <span class="muted">Apply without asking:</span>
-              <label class="check"><input type="checkbox" name="auto" value="settle"> settling new memories</label>
+              <label class="check"><input type="checkbox" name="auto" value="settle"> settling fresh memories</label>
               <label class="check"><input type="checkbox" name="auto" value="pack"> packing</label>
               <label class="check"><input type="checkbox" name="auto" value="fix_link"> link fixes</label>
               <label class="check"><input type="checkbox" name="auto" value="archive"> archiving</label>
@@ -198,7 +198,7 @@
           </fieldset>
           <fieldset>
             <legend>Connect your coding agents</legend>
-            <p class="muted small">Let Claude Code or Codex search this notebook before they dig into something, and save what they find to your inbox. They talk to FastMind over MCP, on this computer.</p>
+            <p class="muted small">Let Claude Code or Codex search this notebook before they dig into something, and save what they find as fresh memories. They talk to FastMind over MCP, on this computer.</p>
             <div class="agent-row"><span class="muted small">Claude Code (run once in a terminal)</span><code id="agent-claude"></code><button type="button" class="chip" data-copy="agent-claude">Copy</button></div>
             <div class="agent-row"><span class="muted small">Codex (add to ~/.codex/config.toml)</span><code id="agent-codex"></code><button type="button" class="chip" data-copy="agent-codex">Copy</button></div>
           </fieldset>
@@ -247,7 +247,7 @@
   <!-- Capture dialog inside the main window -->
   <dialog id="capture-dialog" class="capture-dialog">
     <form id="capture-form" class="capture-box" method="dialog">
-      <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ inbox</span></div>
+      <div class="capture-title"><span class="dot"></span> Capture <span class="muted">→ Fresh memories</span></div>
       <textarea id="capture-text" placeholder="What do you want to keep? A thought, a link, a fix… #tags work. Paste or drop screenshots and files."></textarea>
       <div class="attachments" id="capture-files" hidden></div>
       <div class="capture-footer">

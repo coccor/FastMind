@@ -148,7 +148,7 @@ function show(view) {
 async function refreshStatus() {
   try {
     const status = await call("status");
-    $("#badge-inbox").textContent = status.inbox || "";
+    $("#badge-inbox").textContent = "";
     $("#badge-dream").textContent = status.dream && status.dream.pending ? status.dream.pending : "";
     $("#notebook-line").textContent = `${status.notes} notes · ${status.notebook}`;
   } catch (error) {
@@ -183,11 +183,11 @@ async function loadHome() {
   }
 
   const inbox = $("#home-inbox");
-  inbox.innerHTML = `<div class="home-title">✎ Inbox <span class="muted small">${home.inbox_count ? home.inbox_count + " to file" : "empty"}</span></div>`
+  inbox.innerHTML = `<div class="home-title">✎ Fresh memories <span class="muted small">${home.inbox_count ? home.inbox_count + " settling tonight" : ""}</span></div>`
     + (home.inbox.length
       ? `<ul class="mini">${home.inbox.map((n) => `<li><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a><span class="muted small"> · ${esc(ago(n.captured))}</span></li>`).join("")}</ul>
-         <div class="row gap"><button class="primary" data-go="inbox">File them</button></div>`
-      : `<p class="muted">Inbox zero. Capture something and it lands here.</p>`);
+         <div class="row gap"><button data-go="inbox">See them</button></div>`
+      : `<p class="muted">Nothing new. What you capture lands here, and settles overnight.</p>`);
 
   const back = $("#home-resurfaced");
   back.innerHTML = `<div class="home-title">↺ From your notebook</div>`
@@ -453,7 +453,7 @@ async function loadInbox() {
   try {
     const notes = await call("inbox");
     if (!notes.length) {
-      list.innerHTML = `<li class="empty">Inbox zero. Captures land here until you file them.</li>`;
+      list.innerHTML = `<li class="empty">No fresh memories. What you capture lands here, written up, and settles overnight.</li>`;
       return;
     }
     list.innerHTML = notes
@@ -466,7 +466,7 @@ async function loadInbox() {
           <div class="meta"><span>${esc(ago(n.captured))}</span>${(n.tags || []).map((t) => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
           <div class="homes" data-loading="1"><span class="muted small">${n.writing ? "" : "Finding where it belongs…"}</span></div>
         </div><div class="actions">
-          <button data-act="read" title="Read (R)">Read</button>${n.can_write && !n.writing && !n.written_by && !n.write_failed ? `<button data-act="write" title="Write the note from what you captured (W)">Write</button>` : ""}<button data-act="keep" title="Keep in the inbox, off this list (K)">Keep</button><button data-act="archive" title="Archive (A)">Archive</button>
+          <button data-act="read" title="Read (R)">Read</button>${n.can_write && !n.writing && !n.written_by && !n.write_failed ? `<button data-act="write" title="Write the note from what you captured (W)">Write</button>` : ""}<button data-act="keep" title="Keep it where it is; Dream won't move it (K)">Keep</button><button data-act="archive" title="Archive (A)">Archive</button>
         </div></div></li>`)
       .join("");
     // While the model writes, check back: the card turns into the written note.
@@ -484,13 +484,13 @@ async function loadHomes(card) {
   try {
     const homes = await call("suggest_homes", { path: card.dataset.path });
     const chip = (h, primary) => `<button class="${primary ? "primary file-best" : "chip"}" data-act="file" data-kind="${esc(h.kind)}" data-target="${esc(h.target)}"
-        title="${h.because.length ? "Beside " + esc(h.because.join(", ")) : ""}">${primary ? "File in " : ""}${h.kind === "note" ? "❖ " : "▸ "}${esc(h.label)}</button>`;
+        title="${h.because.length ? "Beside " + esc(h.because.join(", ")) : ""}">${primary ? "Settle in " : ""}${h.kind === "note" ? "❖ " : "▸ "}${esc(h.label)}</button>`;
     const why = (h) => h.score > 1e30 ? h.because.join(" ") : "Beside " + h.because.join(", ");
     box.innerHTML = (homes.length ? chip(homes[0], true) + homes.slice(1).map((h) => chip(h, false)).join("") : `<span class="muted small">No obvious home yet.</span>`)
       + ` <button class="chip" data-act="other">Other folder…</button>`
       + (homes.length && homes[0].because.length ? `<div class="muted small why">${esc(why(homes[0]))}</div>` : "");
   } catch {
-    box.innerHTML = `<button class="chip" data-act="other">File in a folder…</button>`;
+    box.innerHTML = `<button class="chip" data-act="other">Settle in a folder…</button>`;
   }
 }
 
@@ -498,7 +498,7 @@ async function fileCard(card, kind, target) {
   const path = card.dataset.path;
   const args = kind === "note" ? { path, home: target } : { path, folder: target };
   const { path: filed } = await call("file_note", args);
-  toast(`Filed in ${filed.includes("/") ? filed.slice(0, filed.lastIndexOf("/") + 1) : "the notebook root"}. History can undo it.`);
+  toast(`Settled in ${filed.includes("/") ? filed.slice(0, filed.lastIndexOf("/") + 1) : "the notebook root"}. History can undo it.`);
   const next = card.nextElementSibling;
   card.remove();
   if (next) next.classList.add("focused"), next.focus();
@@ -534,7 +534,7 @@ $("#inbox-list").addEventListener("click", async (event) => {
     if (act === "file") { await fileCard(card, button.dataset.kind, button.dataset.target); return; }
     if (act === "other") { askFolder(card); return; }
     if (act === "cancel-other") { loadHomes(card); return; }
-    if (act === "keep") { await call("inbox_keep", { path }); toast("Kept. It leaves the inbox; History can undo it."); }
+    if (act === "keep") { await call("inbox_keep", { path }); toast("Kept where it is; Dream won't move it. History can undo it."); }
     if (act === "archive") { await call("archive_note", { path }); toast("Archived. Restore it from the Archive any time."); }
     if (act === "keep" || act === "archive") { loadInbox(); refreshStatus(); }
   } catch (error) {
@@ -568,7 +568,7 @@ $("#inbox-list").addEventListener("keydown", (event) => {
 
 // ---------- Dream ----------
 const KIND_ICON = { merge: "⧉", topic: "❖", archive: "▤", fix_link: "⛓", pack: "⇲", settle: "↳" };
-const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle new memories" };
+const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle fresh memories" };
 
 async function loadDream() {
   try {
@@ -864,7 +864,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
 const SKILL_NAMES = {
   "write-capture": "Write a capture", merge: "Merge duplicates", "gather-topic": "Gather a topic",
   "gather-thread": "Gather AI sessions", archive: "Decide what to archive", "fix-link": "Mend broken links",
-  settle: "Settle new memories", answer: "Answer from your notes", "ai-session": "Write up an AI session",
+  settle: "Settle fresh memories", answer: "Answer from your notes", "ai-session": "Write up an AI session",
 };
 
 async function loadSkills() {
@@ -1025,7 +1025,7 @@ async function saveCapture(text, files = []) {
   if (!text.trim() && !files.length) return false;
   try {
     const saved = await call("capture", { text, files });
-    toast(saved.writing ? "Saved. Writing it up in the background…" : `Saved "${saved.title}"`);
+    toast(saved.writing ? "Saved as a fresh memory. Writing it up…" : `Saved "${saved.title}" as a fresh memory`);
     refreshStatus();
     if (current === "inbox") loadInbox();
     if (current === "home") loadHome();

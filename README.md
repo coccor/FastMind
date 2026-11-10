@@ -22,8 +22,10 @@ and the memory your AI coding sessions never had.
   reads the pages you linked, the screenshots and the text files you attached, and the notes
   and folders you already have. What you captured is always kept, a note you've edited is never
   rewritten, and History undoes it. **Claude Code** works with your Claude plan, no API key.
-- **File in one key.** The inbox suggests where each note belongs, from the notes it's most like
-  (a folder, or a topic note that gets a link to it). **Enter** files it there.
+- **Fresh memories settle on their own.** What you capture is a fresh memory until Dream settles
+  it overnight, beside the notes it belongs with. You can settle one now in one key; you never
+  have to. Each one shows where it's going, from the notes it's most like
+  (a folder, or a topic note that gets a link to it). **Enter** settles it there.
 - **Remember.** Another hotkey searches everything as you type, typos and all. End with `?` and
   it answers from your notes, citing each one it used. Read and edit notes in the app, with
   related notes and backlinks beside them.
@@ -35,8 +37,8 @@ and the memory your AI coding sessions never had.
   how it ended, the files changed, the commands run. Secrets are removed first. Sessions about
   the same work are gathered into one thread overnight.
 - **Memory for your coding agents.** `fastmind mcp` lets Claude Code, Codex or Claude Desktop
-  search the notebook before they dig into something, and save what they find to your inbox.
-- **Home, every morning:** what Dream did and proposes, the inbox, recent notes, and two older
+  search the notebook before they dig into something, and save what they find as fresh memories.
+- **Home, every morning:** what Dream did and proposes, fresh memories, recent notes, and two older
   notes brought back so the good ones don't get lost.
 
 Your notes stay plain `.md` files with front matter, readable by any editor, Obsidian,
@@ -71,7 +73,7 @@ writes the result. Every proposal carries the AI's reason, in a sentence about t
 | **Gather** | Short notes near each other, or AI sessions in one project | Which form one subject, and writes a topic note organised by sub-subject | The pieces go to the archive and links follow. |
 | **Archive** | Unlinked, unopened for 180 days, `done` for 30, empty, or an AI session unopened for 90 | Whether each is still worth having (when in doubt, keep) | Moved to `.fastmind/archive/`: still searchable, restored in one click. Files nothing links to are archived by rule. |
 | **Fix a link** | `[[Postgress vacuum]]` points nowhere; notes with close or shared names | Which note it meant, from the link and its line, or none | The link is corrected. |
-| **Settle** | New memories (inbox notes) older than six hours | Where each belongs: the home it suggested when it wrote the note, or a folder or topic note | Moved there, linked from the topic note. Runs on its own. |
+| **Settle** | Fresh memories older than six hours | Where each belongs: the home it suggested when it wrote the note, or a folder or topic note | Moved there, linked from the topic note. Runs on its own. |
 | **Pack** | Archived notes and undo records over 30 days old | (rules only) | Zipped into `.fastmind/archive/packs/`. Notes can still be restored from the pack. |
 
 What keeps it safe:
@@ -105,7 +107,7 @@ read and improve.
 | `gather-topic` / `gather-thread` | Gathering fragments into a topic note; AI sessions into a thread |
 | `archive` | Deciding which stale notes are still worth keeping |
 | `fix-link` | Deciding which note a broken link meant |
-| `settle` | Deciding where a new memory belongs |
+| `settle` | Deciding where a fresh memory belongs |
 | `answer` | Answering your questions from your notes |
 | `ai-session` | Writing up an AI coding session |
 
@@ -124,7 +126,7 @@ can't break FastMind. Changing a skill makes Dream look at those notes again.
 | **Ctrl+Enter** | Save a capture, or ask the question in the search box |
 | **↑ ↓ / Enter** | Move through results / read |
 | **Ctrl+E**, **Ctrl+S** | Edit the open note, save it |
-| Inbox: **Enter**, **F**, **K**, **A** | File in the suggestion, another folder, keep, archive |
+| Fresh memories: **Enter**, **F**, **K**, **A** | Settle in the suggestion, another folder, keep where it is, archive |
 | **Ctrl+K** / **Ctrl+N** | Search / capture, inside the app |
 
 Hotkeys can be changed in Settings and apply at once. Closing the window keeps FastMind in the
@@ -140,7 +142,7 @@ claude mcp add --scope user fastmind -- fastmind mcp
 ```
 
 Agents get `search_notes`, `read_note`, `ask_notebook` and `save_finding`. Their findings land
-in your inbox tagged `agent`, with secrets removed.
+as a fresh memory tagged `agent`, with secrets removed.
 
 ## The command line
 
@@ -149,7 +151,7 @@ in your inbox tagged `agent`, with secrets removed.
 ```
 fastmind setup ~/Notes                    # choose the notebook
 fastmind capture "lag spikes in the ledger batch" --tag perf --attach ./ledger.log
-fastmind write inbox/Lag.md               # write a captured note (again) with the model
+fastmind write "Fresh memories/Lag.md"              # write a captured note (again) with the model
 fastmind search "#perf ledger"
 fastmind ask "why did the ledger batch lag?"
 fastmind dream | dream apply all | dream undo p3
