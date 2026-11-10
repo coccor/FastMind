@@ -182,6 +182,15 @@ cargo test --workspace
 cargo build --release -p fastmind-desktop -p fastmind-cli
 ```
 
+Installers come from Tauri's packager (`cargo install tauri-cli --version "^2"` once). It builds
+the `fastmind` command first and puts it beside the app, so agents and the session hook can
+start it:
+
+```sh
+cd apps/desktop && cargo tauri build
+# Windows: target/release/bundle/nsis/FastMind_<version>_x64-setup.exe and bundle/msi/*.msi
+```
+
 | Folder | |
 |---|---|
 | `crates/core` | Notebook, capture, search, answers, Dream, filing, AI sessions, journal, archive. No UI and nothing OS-specific. |

@@ -374,6 +374,11 @@ fn main() {
             )
             .title("FastMind · Capture")
             .inner_size(560.0, 300.0)
+            .min_inner_size(360.0, 200.0)
+            // Borderless: the page draws its own title row, which moves the window. The system
+            // shadow stays (and Windows 11 rounds the corners).
+            .decorations(false)
+            .shadow(true)
             .resizable(true)
             .always_on_top(true)
             .skip_taskbar(true)

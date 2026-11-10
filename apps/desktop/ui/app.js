@@ -1198,6 +1198,7 @@ function startCaptureOnly() {
   const files = attachable(area, $("#capture-files-mini"));
   const clearDraft = keepDraft(area, "fastmind.draft.window");
   const close = () => (tauri ? tauri.core.invoke("hide_capture") : window.close());
+  $("#capture-close-mini").addEventListener("click", () => close());
   area.focus();
   $("#capture-form-mini").addEventListener("submit", async (event) => {
     event.preventDefault();

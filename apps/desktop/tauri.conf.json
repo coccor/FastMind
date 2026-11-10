@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "dev.coccor.fastmind",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "ui",
+    "beforeBuildCommand": "cargo build --release -p fastmind-cli"
   },
   "app": {
     "withGlobalTauri": true,

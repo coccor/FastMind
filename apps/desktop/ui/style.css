@@ -197,8 +197,14 @@ legend { font-weight: 650; padding: 0 6px; }
 .capture-title .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
 .capture-box textarea { min-height: 140px; resize: vertical; font-size: 15px; border: none; background: var(--bg); }
 .capture-footer { display: flex; justify-content: space-between; align-items: center; }
-.capture-only { height: 100vh; padding: 8px; }
-.capture-only .capture-box { height: 100%; box-shadow: none; }
+.capture-only { height: 100vh; padding: 0; }
+/* The window has no frame: the box is the window, edge to edge. */
+.capture-only .capture-box { height: 100%; box-shadow: none; border: none; border-radius: 0; box-sizing: border-box; padding: 10px 12px 12px; }
+.capture-only .capture-title { cursor: grab; user-select: none; -webkit-user-select: none; padding: 2px 0 4px; }
+.capture-close { margin-left: auto; border: none; background: transparent; color: var(--muted); padding: 2px 8px; border-radius: 6px; cursor: pointer; }
+.capture-close:hover { background: var(--bg); color: var(--text); }
+.capture-box .capture-close { display: none; }
+.capture-only .capture-close { display: inline-block; }
 .capture-only textarea { flex: 1; }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow); max-width: 80vw; z-index: 10; }
