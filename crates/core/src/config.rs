@@ -36,6 +36,27 @@ pub struct Settings {
 pub struct Hotkeys {
     pub capture: String,
     pub remember: String,
+    /// On Hyprland, which leaves global shortcuts' keys to the user, FastMind binds them itself
+    /// while it runs. Off for people who bind them in their own config.
+    pub bind_in_hyprland: bool,
+}
+
+impl Hotkeys {
+    /// A hotkey is an accelerator like "CommandOrControl+Alt+Space": letters, digits and `+`.
+    /// The desktop app writes them into other programs' config (Hyprland's), so nothing else
+    /// may get in.
+    pub fn check(&self) -> std::result::Result<(), String> {
+        for (name, keys) in [("capture", &self.capture), ("remember", &self.remember)] {
+            let fine =
+                keys.len() <= 64 && keys.chars().all(|c| c.is_ascii_alphanumeric() || c == '+');
+            if !fine {
+                return Err(format!(
+                    "the {name} hotkey {keys:?} isn't a key combination (only letters, digits and +)"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -95,6 +116,7 @@ impl Default for Hotkeys {
         Self {
             capture: "CommandOrControl+Alt+Space".into(),
             remember: "CommandOrControl+Alt+R".into(),
+            bind_in_hyprland: true,
         }
     }
 }
@@ -179,6 +201,29 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkeys_are_only_key_combinations() {
+        let ok = Hotkeys::default();
+        assert!(ok.check().is_ok());
+        let empty = Hotkeys {
+            capture: String::new(),
+            ..Hotkeys::default()
+        };
+        assert!(empty.check().is_ok());
+        for bad in [
+            "X\")) os.execute(\"id\") --",
+            "Ctrl+Alt+ Space",
+            "Ctrl+Alt+Space\nexec",
+            "Ctrl,Alt",
+        ] {
+            let hotkeys = Hotkeys {
+                capture: bad.into(),
+                ..Hotkeys::default()
+            };
+            assert!(hotkeys.check().is_err(), "{bad:?} got through");
+        }
+    }
 
     #[test]
     fn missing_fields_take_defaults() {

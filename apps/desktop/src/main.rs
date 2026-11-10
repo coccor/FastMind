@@ -16,7 +16,84 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+#[cfg(target_os = "linux")]
+mod hyprland;
+#[cfg(target_os = "linux")]
+mod wayland_keys;
+
 struct Core(Arc<App>);
+
+/// How the hotkeys are wired, for Settings: grabbed by FastMind ("native"), asked of the
+/// desktop's shortcuts service on Wayland ("portal"), or not available ("none").
+#[derive(Default)]
+struct HotkeyStatus(std::sync::Mutex<Value>);
+
+fn set_hotkey_status(app: &AppHandle, status: Value) {
+    *app.state::<HotkeyStatus>()
+        .0
+        .lock()
+        .expect("hotkey status lock") = status;
+    let _ = app.emit("hotkeys-changed", ());
+}
+
+#[tauri::command]
+fn hotkey_status(status: tauri::State<'_, HotkeyStatus>) -> Value {
+    status.0.lock().expect("hotkey status lock").clone()
+}
+
+/// The hotkeys from Settings that are set, as (id, accelerator).
+#[cfg(target_os = "linux")]
+fn hotkey_list(settings: &Settings) -> Vec<(&'static str, String)> {
+    [
+        ("capture", &settings.hotkeys.capture),
+        ("remember", &settings.hotkeys.remember),
+    ]
+    .into_iter()
+    .filter(|(_, keys)| !keys.trim().is_empty())
+    .map(|(id, keys)| (id, keys.trim().to_owned()))
+    .collect()
+}
+
+/// "Change in the desktop's settings…": the desktop's own dialog for FastMind's shortcuts.
+#[tauri::command]
+async fn hotkeys_configure() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        wayland_keys::configure().await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("only needed on Linux".into())
+    }
+}
+
+/// What a launch asks for: `--capture` opens the capture box, `--remember` the search, so a
+/// desktop's own key bindings can run `fastmind-desktop --capture`. A second launch hands its
+/// arguments to the running FastMind.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Launch {
+    Main,
+    Capture,
+    Remember,
+}
+
+fn launch_from(args: &[String]) -> Launch {
+    if args.iter().any(|a| a == "--capture") {
+        Launch::Capture
+    } else if args.iter().any(|a| a == "--remember") {
+        Launch::Remember
+    } else {
+        Launch::Main
+    }
+}
+
+fn open_for(app: &AppHandle, launch: Launch) {
+    match launch {
+        Launch::Main => show_main(app, None),
+        Launch::Capture => show_capture(app),
+        Launch::Remember => show_main(app, Some("remember")),
+    }
+}
 
 /// The one command the UI calls: every FastMind command by name, run off the UI thread.
 #[tauri::command]
@@ -137,6 +214,9 @@ fn show_main(app: &AppHandle, view: Option<&str>) {
         }
     }
 }
+
+/// The capture box's size, in logical pixels.
+const CAPTURE_SIZE: (f64, f64) = (560.0, 300.0);
 
 fn show_capture(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("capture") {
@@ -299,7 +379,17 @@ fn notify_dream(app: &AppHandle, report: &Value) {
 fn register_hotkeys(app: &AppHandle, settings: &Settings) {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
+    #[cfg(target_os = "linux")]
+    if wayland_keys::in_wayland_session() {
+        wayland_keys::bind(
+            app.clone(),
+            hotkey_list(settings),
+            settings.hotkeys.bind_in_hyprland,
+        );
+        return;
+    }
     let mut active = (None, None);
+    let mut problems = Vec::new();
     for (name, keys) in [
         ("capture", &settings.hotkeys.capture),
         ("remember", &settings.hotkeys.remember),
@@ -317,25 +407,34 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) {
                     }
                 }
                 Err(error) => {
-                    eprintln!("The {name} hotkey {keys} is taken or not allowed: {error}")
+                    let problem = format!("The {name} key {keys} is taken or not allowed: {error}");
+                    eprintln!("{problem}");
+                    problems.push(problem);
                 }
             },
-            Err(error) => eprintln!("The {name} hotkey {keys} isn't a valid shortcut: {error}"),
+            Err(error) => {
+                let problem = format!("The {name} key {keys} isn't a valid shortcut: {error}");
+                eprintln!("{problem}");
+                problems.push(problem);
+            }
         }
     }
     *app.state::<Keys>().0.lock().expect("keys lock") = active;
+    set_hotkey_status(app, json!({ "how": "native", "problems": problems }));
 }
 
 fn main() {
     let settings = Settings::load();
-    let start_hidden = std::env::args().any(|arg| arg == "--hidden");
+    let args: Vec<String> = std::env::args().collect();
+    let start_hidden = args.iter().any(|arg| arg == "--hidden");
+    let launch = launch_from(&args);
     let core = Arc::new(App::new(settings.clone()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app, None)
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            open_for(app, launch_from(&args))
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -358,8 +457,11 @@ fn main() {
         )
         .manage(Core(core))
         .manage(Keys::default())
+        .manage(HotkeyStatus::default())
         .invoke_handler(tauri::generate_handler![
             call,
+            hotkey_status,
+            hotkeys_configure,
             open_path,
             hide_capture,
             pick_folder
@@ -367,27 +469,42 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            WebviewWindowBuilder::new(
+            // On Linux the smallest and largest sizes are the same: tiling window managers
+            // (Hyprland, Sway) float a window whose size can't change, and would otherwise tile
+            // the capture box like any window.
+            let (min, max) = if cfg!(target_os = "linux") {
+                (CAPTURE_SIZE, Some(CAPTURE_SIZE))
+            } else {
+                ((360.0, 200.0), None)
+            };
+            let mut capture_window = WebviewWindowBuilder::new(
                 app,
                 "capture",
                 WebviewUrl::App("index.html?mode=capture".into()),
             )
             .title("FastMind · Capture")
-            .inner_size(560.0, 300.0)
-            .min_inner_size(360.0, 200.0)
-            // Borderless: the page draws its own title row, which moves the window. The system
-            // shadow stays (and Windows 11 rounds the corners).
-            .decorations(false)
-            .shadow(true)
-            .resizable(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .center()
-            // Dropped files go to the page, which attaches them to the capture.
-            .disable_drag_drop_handler()
-            .build()?;
+            .inner_size(CAPTURE_SIZE.0, CAPTURE_SIZE.1)
+            .min_inner_size(min.0, min.1);
+            if let Some(max) = max {
+                capture_window = capture_window.max_inner_size(max.0, max.1);
+            }
+            capture_window
+                // Borderless: the page draws its own title row, which moves the window. The system
+                // shadow stays (and Windows 11 rounds the corners).
+                .decorations(false)
+                .shadow(true)
+                .resizable(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .visible(false)
+                .center()
+                // Dropped files go to the page, which attaches them to the capture.
+                .disable_drag_drop_handler()
+                .build()?;
 
+            // Linux trays (libappindicator) send no click events, only the menu: without this
+            // item there would be no way to reach the main window from the tray.
+            let open = MenuItem::with_id(app, "open", "Open FastMind", true, None::<&str>)?;
             let capture = MenuItem::with_id(app, "capture", "Capture…", true, None::<&str>)?;
             let remember = MenuItem::with_id(app, "remember", "Remember…", true, None::<&str>)?;
             let dream = MenuItem::with_id(app, "dream", "Dream now", true, None::<&str>)?;
@@ -400,9 +517,12 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "Quit FastMind", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let separator2 = PredefinedMenuItem::separator(app)?;
+            let separator0 = PredefinedMenuItem::separator(app)?;
             let menu = Menu::with_items(
                 app,
                 &[
+                    &open,
+                    &separator0,
                     &capture,
                     &remember,
                     &separator,
@@ -421,6 +541,7 @@ fn main() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_main(app, None),
                     "capture" => show_capture(app),
                     "remember" => show_main(app, Some("remember")),
                     "dream" => dream_now(app),
@@ -443,13 +564,29 @@ fn main() {
                 .build(app)?;
 
             register_hotkeys(&handle, &settings);
+            // A Hyprland config reload drops the keys FastMind bound: bind them again.
+            #[cfg(target_os = "linux")]
+            if hyprland::running() {
+                let app = handle.clone();
+                hyprland::watch_reloads(move || {
+                    let settings = app.state::<Core>().0.settings();
+                    if !settings.hotkeys.bind_in_hyprland {
+                        return;
+                    }
+                    let binds = hyprland::apply(&hotkey_list(&settings));
+                    let state = app.state::<HotkeyStatus>();
+                    let mut status = state.0.lock().expect("hotkey status lock").clone();
+                    status["hyprland"] = binds;
+                    set_hotkey_status(&app, status);
+                });
+            }
             // Reading a large notebook takes a moment: do it off the startup path, so the tray
             // and hotkeys are there at once and the first search is instant.
             let warm = handle.clone();
             std::thread::spawn(move || update_tray(&warm));
             nightly(handle.clone());
-            if !start_hidden {
-                show_main(&handle, None);
+            if launch != Launch::Main || !start_hidden {
+                open_for(&handle, launch);
             }
             Ok(())
         })
@@ -460,8 +597,17 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("FastMind failed to start");
+        .build(tauri::generate_context!())
+        .expect("FastMind failed to start")
+        .run(|_app, event| {
+            // The keys FastMind bound in Hyprland go with it.
+            #[cfg(target_os = "linux")]
+            if let tauri::RunEvent::Exit = event {
+                hyprland::clear();
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = event;
+        });
 }
 
 #[cfg(test)]
@@ -476,5 +622,19 @@ mod tests {
         assert!(within(at("23:30"), "23:00", "05:00"));
         assert!(within(at("01:00"), "23:00", "05:00"));
         assert!(!within(at("12:00"), "23:00", "05:00"));
+    }
+
+    #[test]
+    fn launch_flags_pick_the_window() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(launch_from(&args(&["fastmind-desktop"])), Launch::Main);
+        assert_eq!(
+            launch_from(&args(&["fastmind-desktop", "--capture"])),
+            Launch::Capture
+        );
+        assert_eq!(
+            launch_from(&args(&["fastmind-desktop", "--hidden", "--remember"])),
+            Launch::Remember
+        );
     }
 }

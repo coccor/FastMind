@@ -63,6 +63,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary:hover { filter: brightness(1.08); }
 button.link { border: none; background: none; color: var(--accent); padding: 0; }
 button.wide { width: 100%; }
+#capture-open { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 input, select, textarea {
   font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
   border-radius: 8px; padding: 7px 10px;
@@ -76,7 +77,11 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
 .nav { display: flex; align-items: center; gap: 10px; border: none; background: none; text-align: left; padding: 8px 10px; border-radius: 8px; color: var(--text); }
 .nav:hover { background: var(--panel); }
 .nav.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.nav .ico { width: 18px; text-align: center; opacity: .8; }
+/* Icons: one collection (Lucide, in icons.js), one size, drawn in the text colour. Not font
+   symbols: those come from whatever font each system falls back to, at different sizes, and
+   some turn into colour emoji. */
+.i { width: 16px; height: 16px; flex-shrink: 0; vertical-align: -3px; }
+.nav .ico { width: 18px; display: grid; place-items: center; opacity: .8; }
 .badge { margin-left: auto; font-size: 11px; background: var(--accent); color: #fff; border-radius: 10px; padding: 0 7px; }
 .badge:empty { display: none; }
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 4px 0; }
@@ -158,7 +163,7 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .card .reason { color: var(--muted); margin-top: 2px; }
 .card .actions { display: flex; gap: 6px; flex-shrink: 0; }
 .card .meta { font-size: 12px; color: var(--muted); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
-.kind { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-size: 16px; flex-shrink: 0; background: var(--accent-soft); color: var(--accent); }
+.kind { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; flex-shrink: 0; background: var(--accent-soft); color: var(--accent); }
 .kind.archive { background: var(--warn-soft); color: var(--warn); }
 .kind.pack { background: var(--ok-soft); color: var(--ok); }
 .card.applied { border-color: var(--ok); }
@@ -205,23 +210,45 @@ legend { font-weight: 650; padding: 0 6px; }
 .capture-close:hover { background: var(--bg); color: var(--text); }
 .capture-box .capture-close { display: none; }
 .capture-only .capture-close { display: inline-block; }
-.capture-only textarea { flex: 1; }
+.capture-only textarea { flex: 1; resize: none; }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow); max-width: 80vw; z-index: 10; }
 .toast.error { background: var(--bad); color: #fff; }
 
+.nb-ico { display: none; }
+
+/* Narrow windows (half a screen in a tiling window manager): the sidebar becomes a rail of
+   icons, each with its name as a tooltip, so every view stays one click away. */
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-  .sidebar { flex-direction: row; overflow-x: auto; padding: 8px; }
-  .brand span, .sidebar-foot .muted, .nb-caret { display: none; }
-  .notebook-menu { position: fixed; top: 56px; bottom: auto; left: 16px; }
-  .sidebar-foot { margin: 0 0 0 auto; padding: 0; }
+  .app { grid-template-columns: 56px 1fr; }
+  .sidebar { padding: 12px 6px; align-items: stretch; overflow-y: auto; }
+  .brand { justify-content: center; padding: 2px 0 12px; }
+  .brand span, .nav .label, #capture-open .label, .nb-text, .nb-caret { display: none; }
+  .nav { position: relative; justify-content: center; padding: 9px 0; }
+  .nav .ico { width: auto; }
+  .nav .badge { position: absolute; top: 2px; right: 2px; margin: 0; padding: 0 5px; font-size: 10px; line-height: 16px; }
+  .sidebar-foot { padding: 8px 0 0; align-items: stretch; }
+  #capture-open { padding: 7px 0; display: grid; place-items: center; }
+  .notebook-switch { justify-content: center; padding: 8px 0; }
+  .nb-ico { display: grid; place-items: center; color: var(--muted); }
+  .notebook-menu { position: fixed; left: 62px; bottom: 12px; width: min(420px, calc(100vw - 78px)); }
   .main { padding: 16px; }
   .split { grid-template-columns: 1fr; }
   .card-head { flex-wrap: wrap; }
   .card-head .grow { flex-basis: 100%; }
   .card .actions { flex-wrap: wrap; }
 }
+
+.keyrow { display: flex; align-items: center; gap: 10px; }
+.keyrow > span:first-child { min-width: 80px; }
+.keyrec { min-width: 200px; text-align: left; font: 13px ui-monospace, monospace; }
+.keyrec.recording { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--accent); }
+.keyrec.unset { color: var(--muted); }
+.hotkey-note .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.hotkey-note { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 8px; }
+.hotkey-note .bad { color: var(--bad); }
+.hotkey-note code { font: 12px ui-monospace, monospace; background: var(--bg); border-radius: 6px; padding: 1px 5px; }
+.hotkey-note code.block { display: block; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; user-select: all; -webkit-user-select: all; }
 
 /* Filing and reading */
 .homes { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -243,7 +270,7 @@ legend { font-weight: 650; padding: 0 6px; }
 .home-capture textarea { min-height: 70px; resize: vertical; font-size: 15px; }
 .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: 14px; align-items: start; }
 .home-card { display: flex; flex-direction: column; gap: 10px; }
-.home-title { font-weight: 650; font-size: 15px; display: flex; gap: 8px; align-items: baseline; }
+.home-title { font-weight: 650; font-size: 15px; display: flex; gap: 8px; align-items: center; }
 .stats.compact { margin-top: 0; }
 .mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .home-card a { color: var(--text); text-decoration: none; font-weight: 550; }
@@ -292,7 +319,7 @@ legend { font-weight: 650; padding: 0 6px; }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .writing-line { color: var(--accent, #4a7); font-size: 0.85em; margin: 4px 0; }
 .inbox-card.is-writing .reason { opacity: 0.6; }
-.written { color: var(--accent, #4a7); font-size: 0.8em; cursor: help; }
+.written { color: var(--accent, #4a7); cursor: help; }
 .write-failed { color: var(--warn, #b60); margin: 4px 0; }
 .original { border-left: 3px solid var(--line); padding: 6px 10px; margin: 8px 0; background: var(--panel, transparent); }
 .original pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0; font: inherit; }
