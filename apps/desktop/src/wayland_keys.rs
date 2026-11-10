@@ -125,19 +125,37 @@ async fn register_app_id() -> Result<(), ashpd::Error> {
         .map(|_| ())
 }
 
-/// `~/.local/share/applications/dev.coccor.fastmind.desktop`, hidden from menus (an installer
-/// adds the visible one), pointing at this binary. Rewritten only when its text changes, so it
-/// follows the binary when FastMind moves.
+/// Marks the desktop entry FastMind writes itself, so it never touches one an installer (or
+/// the user) put there.
+const GENERATED: &str = "X-FastMind-Generated=true";
+
+/// Makes sure the portal finds a `dev.coccor.fastmind.desktop`. An installed one (in any of the
+/// XDG data folders) is left alone. Otherwise FastMind writes one to
+/// `~/.local/share/applications`, hidden from menus and pointing at this binary, and rewrites
+/// it only when its text changes, so it follows the binary when FastMind moves.
 fn write_desktop_entry() -> std::io::Result<()> {
-    let data = std::env::var_os("XDG_DATA_HOME")
+    let home_data = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".local/share"))
         })
         .ok_or_else(|| std::io::Error::other("no home folder"))?;
+    let system_data = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    let name = format!("{APP_ID}.desktop");
+    let path = home_data.join("applications").join(&name);
+    let installed = std::iter::once(home_data.clone())
+        .chain(std::env::split_paths(&system_data))
+        .map(|dir| dir.join("applications").join(&name))
+        .filter_map(|entry| std::fs::read_to_string(entry).ok())
+        .any(|text| !text.contains(GENERATED));
+    if installed {
+        return Ok(());
+    }
     let exe = std::env::current_exe()?;
-    let path = data.join("applications").join(format!("{APP_ID}.desktop"));
     let text = desktop_entry(&exe.to_string_lossy());
     if std::fs::read_to_string(&path).is_ok_and(|current| current == text) {
         return Ok(());
@@ -161,7 +179,7 @@ fn desktop_entry(exe: &str) -> String {
     format!(
         "[Desktop Entry]\nType=Application\nName=FastMind\n\
          Comment=Lets the desktop's shortcuts service know FastMind\n\
-         Exec={quoted}\nIcon=fastmind-desktop\nNoDisplay=true\nTerminal=false\n"
+         Exec={quoted}\nIcon=fastmind-desktop\nNoDisplay=true\nTerminal=false\n{GENERATED}\n"
     )
 }
 
@@ -286,6 +304,7 @@ mod tests {
 "#
         ));
         assert!(entry.contains("NoDisplay=true\n"));
+        assert!(entry.contains(GENERATED));
     }
 
     #[test]

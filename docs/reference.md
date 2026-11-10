@@ -39,8 +39,8 @@ global shortcuts service (the XDG portal) for them, and Settings › Hotkeys say
 - **Anywhere else**, bind a key in your desktop to run `fastmind-desktop --capture` (or
   `--remember`): it opens the box in the FastMind that's already running.
 
-To be known to the portal, FastMind writes a hidden desktop entry,
-`~/.local/share/applications/dev.coccor.fastmind.desktop`, pointing at its binary. On X11 the
+The portal only knows apps by their desktop entry, `dev.coccor.fastmind.desktop`. If none is
+installed, FastMind writes a hidden one to `~/.local/share/applications`, pointing at its binary. On X11 the
 hotkeys work as on Windows and macOS.
 
 ## Choosing the AI
