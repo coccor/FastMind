@@ -21,6 +21,28 @@
 Hotkeys can be changed in Settings and apply at once. Closing the window keeps FastMind in the
 tray, where it dreams at night.
 
+### Hotkeys on Linux (Wayland)
+
+Wayland doesn't let an app take keys for the whole desktop, so there FastMind asks the desktop's
+global shortcuts service (the XDG portal) for them, and Settings › Hotkeys says how that went:
+
+- **KDE, GNOME**: the desktop may ask you to confirm the keys; change them later in its keyboard
+  settings.
+- **Hyprland** registers FastMind's shortcuts but leaves the keys to you. Settings shows the lines
+  to add to `~/.config/hypr/hyprland.conf`, for the default keys:
+
+  ```
+  bind = CTRL ALT, SPACE, global, dev.coccor.fastmind:capture
+  bind = CTRL ALT, R, global, dev.coccor.fastmind:remember
+  ```
+
+- **Anywhere else**, bind a key in your desktop to run `fastmind-desktop --capture` (or
+  `--remember`): it opens the box in the FastMind that's already running.
+
+To be known to the portal, FastMind writes a hidden desktop entry,
+`~/.local/share/applications/dev.coccor.fastmind.desktop`, pointing at its binary. On X11 the
+hotkeys work as on Windows and macOS.
+
 ## Choosing the AI
 
 FastMind runs on an AI you choose, and won't start without one:

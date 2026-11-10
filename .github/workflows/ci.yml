@@ -33,7 +33,9 @@ jobs:
 
       - name: UI script parses
         if: runner.os == 'Linux'
-        run: node --check apps/desktop/ui/app.js
+        run: |
+          node --check apps/desktop/ui/icons.js
+          node --check apps/desktop/ui/app.js
 
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings

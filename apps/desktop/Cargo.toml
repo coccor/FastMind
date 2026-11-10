@@ -23,3 +23,9 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 opener = "0.7"
+
+# Global hotkeys under Wayland go through the desktop's shortcuts service (the XDG portal).
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "global_shortcuts"] }
+futures-util = { version = "0.3", default-features = false }
+tokio = { version = "1", default-features = false, features = ["sync"] }
