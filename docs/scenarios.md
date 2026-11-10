@@ -63,18 +63,23 @@ Never proposed: "Work" (a `type: project` home note) and "Reading list" (`pin: t
 2. Open **Archive**: "Q1 planning" and "Old blog draft" are *packed* into a zip.
 3. Press **Restore** on "Q1 planning". It's back at `work/Q1 planning.md`, unzipped.
 
-## 5. Dream with a model (optional)
+## 5. FastMind needs its AI
 
-In **Settings › Model** choose **Local server** (with Ollama running: `ollama run llama3.2`) or
-**Claude** (with `ANTHROPIC_API_KEY` set). Dream now asks the model to title and summarize
-each topic note, and Remember writes its answers in prose, citing notes as [1], [2]. If the
-model can't be reached, both fall back to the offline way and say so.
+1. On a fresh install the welcome screen starts with **Your AI**. Claude Code is chosen when it's
+   installed; the Claude API is offered when `ANTHROPIC_API_KEY` is set; a local server always.
+2. **Start** checks the AI answers ("✓ Claude Code answered in 4.0 s") before anything is saved.
+   If it doesn't, it says why, and nothing changes.
+3. A notebook set up before, with no AI chosen, shows only the AI step.
+4. From a terminal: `fastmind search wifi` says "FastMind needs an AI provider…";
+   `fastmind model claude-code` checks it and saves it.
+5. In Dream, every proposal's reason is the AI's sentence about those notes, and merged and
+   topic notes are written by it. Edit one of a merge's notes before accepting: the merge
+   becomes *out of date* rather than overwriting your edit.
 
 ## 5b. Captures written into finished notes
 
-1. In **Settings › Model** choose **Claude Code (uses your Claude plan)**. Leave "Write each
-   capture into a finished note" on. Optionally say how you like notes written ("Always in
-   English. Short.").
+1. Optionally, in **Settings › Model**, say how you like notes written ("Always in English.
+   Short.").
 2. Capture something rough: `standup: Mara says the EU invoices batch moved to 02:00 UTC
    because of the bank's new cutoff. need to update the runbook and tell support`.
 3. The toast says "Saved. Writing it up in the background…". In **Inbox** the card shows

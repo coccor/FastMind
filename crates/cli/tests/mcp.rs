@@ -15,6 +15,12 @@ fn an_agent_can_search_and_save_findings() {
     )
     .unwrap();
 
+    // FastMind needs a provider set up; nothing here calls it.
+    std::fs::write(
+        dir.path().join("settings.json"),
+        r#"{"model": {"provider": "claude-code", "model": "sonnet"}}"#,
+    )
+    .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_fastmind"))
         .args(["--notebook", notebook.to_str().unwrap(), "mcp"])
         .env("FASTMIND_CONFIG", dir.path().join("settings.json"))

@@ -8,7 +8,8 @@ fn main() {
     let app = App::ephemeral(Settings {
         notebook: Some(dir.into()),
         ..Settings::default()
-    });
+    })
+    .offline_for_tests();
     for command in ["status", "inbox", "home", "status"] {
         let t = Instant::now();
         app.call(command, json!({})).unwrap();

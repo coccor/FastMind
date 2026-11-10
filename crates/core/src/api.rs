@@ -30,7 +30,12 @@ pub struct App {
     /// Set while Dream runs, so a second run waits its turn.
     dreaming: Mutex<()>,
     persist: bool,
+    /// Tests only: run without a model, with Dream on text statistics alone.
+    offline: bool,
 }
+
+/// What FastMind says when no AI provider is set up.
+pub const NEEDS_MODEL: &str = "FastMind needs an AI provider: choose one in Settings (Claude Code uses your Claude plan), or run `fastmind model claude-code`";
 
 /// How long a search index is reused before the files are read again.
 const INDEX_FRESH: Duration = Duration::from_secs(1);
@@ -91,7 +96,16 @@ impl App {
             writing: Arc::new(Mutex::new(HashSet::new())),
             dreaming: Mutex::new(()),
             persist: true,
+            offline: false,
         }
+    }
+
+    /// Tests of FastMind's file handling, which mustn't call a model: no provider is needed,
+    /// and Dream decides on text statistics alone. Not for users: FastMind needs a model.
+    #[doc(hidden)]
+    pub fn offline_for_tests(mut self) -> Self {
+        self.offline = true;
+        self
     }
 
     /// An app whose settings live only in memory (tests, one-off CLI runs).
@@ -153,10 +167,33 @@ impl App {
     }
 
     pub fn call(&self, name: &str, args: Value) -> Result<Value> {
+        // FastMind is built on a model: until a provider is chosen, only setting one up works.
+        if !self.offline
+            && !self.settings().model.is_on()
+            && !matches!(
+                name,
+                "settings_get"
+                    | "settings_set"
+                    | "first_run"
+                    | "setup"
+                    | "agent_setup"
+                    | "status"
+                    | "model_check"
+                    | "ai_status"
+            )
+        {
+            return Err(Error::msg(NEEDS_MODEL));
+        }
         // These don't need the notebook, so they never create its folder.
         if matches!(
             name,
-            "settings_get" | "settings_set" | "demo_create" | "first_run" | "setup" | "agent_setup"
+            "settings_get"
+                | "settings_set"
+                | "demo_create"
+                | "first_run"
+                | "setup"
+                | "agent_setup"
+                | "model_check"
         ) {
             return self.call_without_notebook(name, args);
         }
@@ -179,7 +216,8 @@ impl App {
                         capture::is_url(request.text.trim()).then(|| request.text.trim().to_owned())
                     });
                 let settings = self.settings();
-                let writes = settings.model.is_on() && settings.writing.enabled;
+                let writes =
+                    settings.model.is_on() && settings.writing.enabled && !request.as_written;
                 if let (true, Some(id)) = (writes, saved.capture_id.clone()) {
                     // The model reads the page itself, so no separate title fetch.
                     if request.wait {
@@ -460,6 +498,11 @@ impl App {
                         now,
                     )?;
                 }
+                let ask = |system: &str, user: &str, schema: &Value| match &model {
+                    Some(model) => model.complete_json(system, user, &[], schema),
+                    None => Err(Error::msg(NEEDS_MODEL)),
+                };
+                let ask: Option<dream::ai::Ask> = if self.offline { None } else { Some(&ask) };
                 dream::run_in(
                     &nb,
                     &settings.dream,
@@ -467,7 +510,7 @@ impl App {
                         inbox: settings.inbox.clone(),
                         ai_folder: settings.ai.folder.clone(),
                     },
-                    model.as_ref(),
+                    ask,
                     now,
                 )?;
                 let auto = dream::auto_apply(&nb, &settings.dream, now)?;
@@ -595,20 +638,40 @@ impl App {
                 let settings = self.settings();
                 let transcripts =
                     crate::sessions::discover(&crate::sessions::AiSettings::default());
+                let claude_code = crate::model::find_claude_code();
                 json!({
-                    "needs_setup": settings.notebook.is_none(),
+                    "needs_setup": settings.notebook.is_none() || !settings.model.is_on(),
+                    "needs_notebook": settings.notebook.is_none(),
+                    "needs_model": !settings.model.is_on(),
+                    "model": settings.model,
+                    "claude_code": claude_code.map(|p| p.display().to_string()),
+                    "anthropic_key": std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
                     "candidates": crate::setup::candidates(),
                     "ai_sessions": transcripts.len(),
                     "hotkeys": settings.hotkeys,
                 })
             }
+            "model_check" => {
+                // A tiny request, so setup can say the provider works before it's saved.
+                let settings: crate::model::ModelSettings = arg(&args, "model")?;
+                let model =
+                    Model::from_settings(&settings).ok_or_else(|| Error::msg(NEEDS_MODEL))?;
+                let started = std::time::Instant::now();
+                let reply = model.complete("Reply with the single word OK.", "Are you there?")?;
+                json!({ "ok": true, "reply": crate::text::excerpt(&reply, 40), "ms": started.elapsed().as_millis() as u64 })
+            }
             "setup" => {
                 let notebook: PathBuf = arg(&args, "notebook")?;
                 let ai: bool = arg(&args, "ai").unwrap_or(false);
+                let model: Option<crate::model::ModelSettings> =
+                    arg(&args, "model").unwrap_or(None);
                 std::fs::create_dir_all(&notebook)?;
                 let mut settings = self.settings();
                 settings.notebook = Some(notebook);
                 settings.ai.enabled = ai;
+                if let Some(model) = model {
+                    settings.model = model;
+                }
                 self.replace_settings(settings)?;
                 json!({ "ok": true })
             }

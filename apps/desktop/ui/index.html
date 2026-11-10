@@ -26,14 +26,23 @@
     <div class="welcome-box">
       <div class="brand big"><img src="icon.svg" alt="" width="44" height="44"><span>FastMind</span></div>
       <h1>Catch it now. Find it later. It tidies itself while you sleep.</h1>
-      <p class="muted">FastMind works on a folder of plain Markdown notes. Nothing leaves this computer.</p>
-      <h2>Where are your notes?</h2>
-      <div id="welcome-options" class="welcome-options"></div>
-      <form id="welcome-other" class="row gap">
-        <input id="welcome-path" placeholder="Or type a folder path">
-        <button type="button" id="welcome-browse" hidden>Browse…</button>
-      </form>
-      <label class="check" id="welcome-ai-row" hidden><input type="checkbox" id="welcome-ai" checked> <span id="welcome-ai-text"></span></label>
+      <p class="muted">FastMind keeps your notes as plain Markdown in a folder, and an AI you choose writes them up, answers from them and tidies them while you sleep.</p>
+      <h2>Your AI</h2>
+      <div id="welcome-models" class="welcome-options"></div>
+      <div id="welcome-local" class="row gap" hidden>
+        <input id="welcome-local-model" placeholder="Model, e.g. llama3.2">
+        <input id="welcome-local-url" placeholder="http://localhost:11434/v1">
+      </div>
+      <div id="welcome-check" class="muted small" aria-live="polite"></div>
+      <div id="welcome-notebook">
+        <h2>Where are your notes?</h2>
+        <div id="welcome-options" class="welcome-options"></div>
+        <form id="welcome-other" class="row gap">
+          <input id="welcome-path" placeholder="Or type a folder path">
+          <button type="button" id="welcome-browse" hidden>Browse…</button>
+        </form>
+        <label class="check" id="welcome-ai-row" hidden><input type="checkbox" id="welcome-ai" checked> <span id="welcome-ai-text"></span></label>
+      </div>
       <div class="welcome-keys muted small" id="welcome-keys"></div>
       <div class="row gap">
         <button class="primary" id="welcome-start">Start</button>
@@ -195,10 +204,9 @@
           </fieldset>
           <fieldset>
             <legend>Model</legend>
-            <p class="muted small">Optional. A model writes your captures into finished notes and improves Dream's titles and Remember's answers. Without one, everything works from text statistics alone and nothing leaves this computer.</p>
+            <p class="muted small">FastMind's AI writes up each capture, answers your questions from your notes, and decides overnight what to merge, gather, archive and settle.</p>
             <label>Provider
               <select name="provider">
-                <option value="none">None (offline)</option>
                 <option value="claude-code">Claude Code (uses your Claude plan)</option>
                 <option value="claude">Claude API (needs ANTHROPIC_API_KEY)</option>
                 <option value="local">Local server (Ollama, LM Studio…)</option>
@@ -207,8 +215,7 @@
             <label>Model <input name="model" placeholder="sonnet"></label>
             <label>Server <input name="base_url" placeholder="http://localhost:11434/v1"></label>
             <div id="writing-fields">
-              <label class="check"><input type="checkbox" name="write_enabled"> Write each capture into a finished note: title, summary, key points, tasks, related notes and where it belongs</label>
-              <p class="muted small">Your capture is saved as you typed it at once; the written note replaces it a few seconds later, unless you've edited it. The original is always kept, and History undoes the rewrite.</p>
+              <p class="muted small">Each capture is saved as you typed it at once, then written up a few seconds later: title, summary, key points, tasks, related notes and where it belongs. A note you've edited is never rewritten, the original is always kept, and History undoes it.</p>
               <label class="stack">How you like your notes written <textarea name="write_instructions" rows="3" placeholder="e.g. Always write in English. Keep it short. Use bullet points rather than prose."></textarea></label>
             </div>
           </fieldset>

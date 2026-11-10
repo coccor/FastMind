@@ -36,6 +36,10 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
   archive                 Archived notes
   restore ID              Put an archived note back
 
+  model claude-code|claude|local [MODEL] [--url URL]
+                          Choose the AI FastMind runs on, and check it answers
+                          (claude-code uses your Claude plan; claude needs
+                          ANTHROPIC_API_KEY; local is Ollama, LM Studio…)
   setup DIR               Use DIR as the notebook (made if missing)
   demo [DIR]              Make a messy demo notebook and use it
   serve [--port N] [--ui DIR]
@@ -186,7 +190,7 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
             if writes && !args.json {
                 eprintln!("Writing the note with {}…", app.settings().model.label());
             }
-            let saved = app.call("capture", json!({"text": text, "url": url, "tags": tags, "attachments": attachments, "folder": folder, "wait": writes}))?;
+            let saved = app.call("capture", json!({"text": text, "url": url, "tags": tags, "attachments": attachments, "folder": folder, "wait": writes, "as_written": raw}))?;
             out(&saved, &|v| {
                 println!("Saved \"{}\" as {}", s(&v["title"]), s(&v["path"]));
                 if let Some(error) = v["write_error"].as_str() {
@@ -340,6 +344,44 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
                 .ok_or_else(|| usage("restore needs an archive id"))?;
             let done = app.call("archive_restore", json!({"id": id}))?;
             out(&done, &|v| println!("Restored to {}", s(&v["path"])));
+        }
+        "model" | "ai" => {
+            let url = take_flag(&mut rest, "--url").pop();
+            let provider = rest.first().map(String::as_str).unwrap_or("");
+            let name = rest.get(1).cloned();
+            let model = match provider {
+                "claude-code" | "claudecode" => {
+                    json!({"provider": "claude-code", "model": name.unwrap_or_else(|| "sonnet".into())})
+                }
+                "claude" => {
+                    json!({"provider": "claude", "model": name.unwrap_or_else(|| "claude-opus-5-5".into())})
+                }
+                "local" => {
+                    json!({"provider": "local", "model": name.unwrap_or_else(|| "llama3.2".into()), "base_url": url.unwrap_or_else(|| "http://localhost:11434/v1".into())})
+                }
+                "" => {
+                    let settings = app.call("settings_get", json!({}))?;
+                    println!(
+                        "FastMind runs on: {}",
+                        serde_json::to_string(&settings["settings"]["model"]).unwrap_or_default()
+                    );
+                    return Ok(());
+                }
+                other => {
+                    return Err(usage(&format!(
+                        "unknown provider \"{other}\": use claude-code, claude or local"
+                    )));
+                }
+            };
+            eprintln!("Checking it answers…");
+            let check = app.call("model_check", json!({"model": model}))?;
+            let mut settings = app.call("settings_get", json!({}))?["settings"].clone();
+            settings["model"] = model;
+            app.call("settings_set", json!({"settings": settings}))?;
+            println!(
+                "FastMind now runs on it (answered in {:.1} s).",
+                check["ms"].as_f64().unwrap_or(0.0) / 1000.0
+            );
         }
         "setup" => {
             let folder = rest

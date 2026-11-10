@@ -89,7 +89,7 @@ fn ai_sessions_become_safe_searchable_notes() {
         ..Settings::default()
     };
     settings.ai.enabled = true;
-    let app = App::ephemeral(settings);
+    let app = App::ephemeral(settings).offline_for_tests();
 
     let status = app.call("ai_status", json!({})).unwrap();
     assert_eq!(status["claude_code"], 2);

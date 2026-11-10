@@ -37,11 +37,11 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
 - **Undo checks every file first.** Each journal entry records the hash each file had after the
   change. Undo restores the copies only if every file still has that hash. Each archived item
   has its own small file, so archive changes don't block each other's undo.
-- **Offline first.** Similarity uses tf-idf cosine for shared vocabulary and 3-word shingle
-  containment for shared phrasing. Topic titles come from the word most fragment titles share,
-  plus the word or tag most of them use; summaries are the sentences closest to the group's
-  key words. Answers quote the best-matching sentences. A model only improves titles,
-  summaries and answers.
+- **AI first.** FastMind needs a model and refuses every command but setup without one
+  (`api::NEEDS_MODEL`). Statistics (tf-idf cosine for shared vocabulary, 3-word shingle
+  containment for shared phrasing) only find candidates, loosely, so the model sees a few
+  dozen groups a night rather than the whole notebook. The model decides and writes
+  (`dream/ai.rs`). The statistics-only Dream remains for tests (`App::offline_for_tests`).
 - **Claude through plain HTTP.** Rust has no official Anthropic SDK, so `model.rs` calls the
   Messages API directly: `claude-opus-5-5` at low effort, with server-side refusal fallback.
   The key comes from `ANTHROPIC_API_KEY`. "Local" speaks the OpenAI-compatible chat API that
@@ -52,24 +52,34 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
 1. Read every note. Skip hidden folders, `.fastmind/` included.
 2. Leave out protected notes (home types, pinned, `README`/`index`/`home`) and anything touched
    in the last two days.
-3. **Duplicates:** compare candidate pairs that share one of their 12 strongest words. Two notes
-   are duplicates when their vocabulary agrees (cosine ≥ 0.45) and 55% of the shorter note's
-   phrasing is in the longer one. Groups form transitively, and the copy with the most inbound
-   links stays.
-4. **Topics:** take fragments (3–120 words) not already in a merge. Similarity is cosine, plus
-   0.1 when two notes share a tag. Clusters grow around the note with the most neighbours; a
-   newcomer must be close to at least half the group. A cluster needs 3 or more notes.
-5. **Archive:** no inbound links and not used since the cutoff: 180 days idle, 30 days after
-   `status: done`, or empty after a day. "Used" is the newest of the file time, the dates in
-   the front matter and the last open from FastMind. Attachments count when no note mentions
-   their file name.
-6. **Links:** an unresolved link whose target is within one or two typos of exactly one note.
-7. **Pack:** loose archive items and undo records older than their cutoffs.
-8. Save the report, then apply the kinds allowed to run without asking.
+3. **Duplicates:** candidate pairs share one of their 12 strongest words and have cosine ≥ 0.3.
+   They're joined into groups (chains split into groups of six, closest first). For each group
+   the model returns the sets that say the same thing, which note to keep, a reason, and the
+   merged body, losing nothing; front matter (aliases, tags) is built as the offline merge
+   builds it.
+4. **Topics:** fragments (3–120 words) not in a merge, clustered at 0.7× the offline threshold;
+   AI sessions in one project with matching titles or cosine ≥ 0.3, quiet for three days. The
+   model returns which notes belong (two or more), a title, a summary, a body organised by
+   sub-subject, and a reason. "Gathered from" lists the sources by date.
+5. **Archive:** the rules (no inbound links; 180 days idle, 30 after `done`, empty after a day,
+   AI sessions after 90) find candidates; the model keeps what's still worth having, in
+   batches of twelve. Unlinked attachments are archived by rule.
+6. **Links:** each unresolved link with up to six options (within three edits, containing or
+   contained in the name, or sharing half its words); the model picks one from the link and
+   its line, or none. Batches of fifteen.
+7. **Settle:** inbox notes untouched for six hours go to the home the writing step suggested;
+   the rest are placed by the model among their likely home notes and folders.
+8. **Pack:** loose archive items and undo records older than their cutoffs.
+9. Save the report, then apply the kinds allowed to run without asking.
 
-Applying a proposal recomputes it from the current files, so the proposals are independent:
-accepting one doesn't make another stale. If a file it needs is gone, the proposal is marked
-*out of date*.
+Questions run three at a time, within `model_requests` a night. Each answer is cached in
+`.fastmind/dream/verdicts.json` under a key made of the notes' paths and content hashes; the
+cache keeps only keys used in the latest run. A failed question isn't cached, so it's asked
+again next night, and the report says what failed.
+
+Applying a rule-based proposal recomputes it from the current files, so the proposals are
+independent. A proposal the model wrote keeps its notes' hashes (`sources`) and applies its
+text exactly as previewed, only while they're unchanged; otherwise it's *out of date*.
 
 ## Since the first version
 

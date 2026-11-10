@@ -6,6 +6,7 @@
 //! accepted one can be undone from the journal. Only the kinds you allow (packing, by default)
 //! are applied on their own.
 
+pub mod ai;
 pub mod analyze;
 pub mod compose;
 
@@ -13,7 +14,6 @@ use crate::archive::{self, Index};
 use crate::config::DreamSettings;
 use crate::journal::{self, Transaction};
 use crate::links::{self, Resolver};
-use crate::model::{self, Model};
 use crate::notebook::{self, Note, Notebook, STATE_DIR};
 use crate::usage::Usage;
 use crate::{Error, Result, fsx, text};
@@ -54,12 +54,18 @@ pub enum Plan {
     Merge {
         keep: String,
         absorb: Vec<String>,
+        /// The merged note as the model wrote it.
+        #[serde(default)]
+        text: Option<String>,
     },
     Topic {
         path: String,
         title: String,
         summary: String,
         fragments: Vec<String>,
+        /// The topic note as the model wrote it.
+        #[serde(default)]
+        text: Option<String>,
     },
     Archive {
         path: String,
@@ -131,6 +137,10 @@ pub struct Proposal {
     #[serde(default)]
     pub error: Option<String>,
     pub plan: Plan,
+    /// The notes a model-written proposal was written from, with their hashes: it applies only
+    /// while they're unchanged.
+    #[serde(default)]
+    pub sources: Vec<(String, u64)>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -224,22 +234,34 @@ const ATTACHMENT_EXT: [&str; 16] = [
 ];
 
 /// Looks at the whole notebook and writes proposals. Changes nothing in the notes.
+/// Dream with text statistics alone. FastMind itself always dreams with a model ([`run_in`]);
+/// this is for tests and tools that must not call one.
 pub fn run(
     nb: &Notebook,
     settings: &DreamSettings,
-    model: Option<&Model>,
+    ai: Option<ai::Ask>,
     now: DateTime<Local>,
 ) -> Result<Report> {
-    run_in(nb, settings, &Places::default(), model, now)
+    run_in(nb, settings, &Places::default(), ai, now)
 }
 
+/// Dream: statistics find candidates; with `ai`, the model decides each one and writes the
+/// merged and topic notes.
 pub fn run_in(
     nb: &Notebook,
     settings: &DreamSettings,
     places: &Places,
-    model: Option<&Model>,
+    ai: Option<ai::Ask>,
     now: DateTime<Local>,
 ) -> Result<Report> {
+    let judge = ai.map(|ask| ai::Judge::new(nb, ask, settings.model_requests));
+    let used_keys: std::sync::Mutex<HashSet<String>> = std::sync::Mutex::new(HashSet::new());
+    let fingerprint = |paths: &[&Note]| -> Vec<(String, u64)> {
+        paths
+            .iter()
+            .map(|n| (n.path.clone(), text::fnv(n.text.as_bytes())))
+            .collect()
+    };
     let started = std::time::Instant::now();
     let notes = nb.notes();
     let before = totals(nb, &notes);
@@ -248,7 +270,6 @@ pub fn run_in(
     let features = analyze::features(&notes);
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut claimed: HashSet<usize> = HashSet::new();
-    let mut model_budget = settings.model_requests;
     let mut model_notes = Vec::new();
 
     let protected = |note: &Note| {
@@ -267,254 +288,494 @@ pub fn run_in(
         .iter()
         .map(|note| !protected(note) && !recent(note) && !note.is_record())
         .collect();
-    let mut groups = analyze::UnionFind::new(notes.len());
-    let mut best_similarity: HashMap<(usize, usize), f64> = HashMap::new();
-    for (a, b) in analyze::candidate_pairs(&features, &allowed) {
-        if let Some(similarity) =
-            analyze::duplicates(&features[a], &features[b], settings.duplicate_similarity)
-        {
-            groups.union(a, b);
-            best_similarity.insert((a, b), similarity);
-        }
-    }
-    for group in groups.groups() {
-        let keep = *group
-            .iter()
-            .max_by(|a, b| {
-                let score = |i: &usize| {
-                    let note = &notes[*i];
-                    (
-                        inbound.get(&note.path).map_or(0, Vec::len),
-                        (note.status() != "inbox") as u8,
-                        features[*i].words,
-                        note.touched,
-                    )
-                };
-                score(a).cmp(&score(b)).then(b.cmp(a))
-            })
-            .expect("a group has members");
-        let absorb: Vec<usize> = group.iter().copied().filter(|i| *i != keep).collect();
-        let similarity = group
-            .iter()
-            .flat_map(|a| group.iter().map(move |b| (*a, *b)))
-            .filter_map(|pair| best_similarity.get(&pair))
-            .fold(0.0f64, |acc, s| acc.max(*s));
-        let absorbed: Vec<&Note> = absorb.iter().map(|i| &notes[*i]).collect();
-        let merged = compose::merge(&notes[keep], &absorbed, now);
-        let freed = absorbed.iter().map(|n| n.size as i64).sum::<i64>() + notes[keep].size as i64
-            - merged.len() as i64;
-        let names: Vec<String> = absorbed
-            .iter()
-            .map(|n| format!("\"{}\"", n.title))
-            .collect();
-        proposals.push(Proposal {
-            id: String::new(),
-            kind: Kind::Merge,
-            title: if absorbed.iter().all(|n| n.title == notes[keep].title) {
-                format!("Merge {} copies of \"{}\"", group.len(), notes[keep].title)
-            } else {
-                format!("Merge {} into \"{}\"", names.join(", "), notes[keep].title)
-            },
-            reason: format!(
-                "{} say the same thing ({:.0}% alike). The copy with the most links stays; what the others add is kept under it, and their titles become aliases.",
-                if group.len() == 2 { "Both notes".to_owned() } else { format!("These {} notes", group.len()) },
-                similarity * 100.0
-            ),
-            notes: group.iter().map(|i| notes[*i].path.clone()).collect(),
-            notes_removed: absorb.len(),
-            bytes_freed: freed,
-            disk_freed: 0,
-            preview: Some(merged),
-            status: Status::Pending,
-            entry: None,
-            error: None,
-            plan: Plan::Merge {
-                keep: notes[keep].path.clone(),
-                absorb: absorbed.iter().map(|n| n.path.clone()).collect(),
-            },
-        });
-        claimed.extend(group);
-    }
-
-    // 2. Topics: short notes circling one subject, gathered into one note.
-    let fragments: Vec<usize> = (0..notes.len())
-        .filter(|i| {
-            !claimed.contains(i)
-                && allowed[*i]
-                && features[*i].words <= settings.fragment_words
-                && features[*i].words >= 3
-        })
-        .collect();
-    let tags: Vec<HashSet<String>> = notes
-        .iter()
-        .map(|n| {
-            n.front
-                .tags()
-                .into_iter()
-                .map(|t| t.to_lowercase())
-                .collect()
-        })
-        .collect();
-    let similarity = |a: usize, b: usize| {
-        let shared_tag = !tags[a].is_disjoint(&tags[b]);
-        analyze::cosine(&features[a].vector, &features[b].vector)
-            + if shared_tag { 0.1 } else { 0.0 }
-    };
-    let is_fragment: Vec<bool> = {
-        let mut flags = vec![false; notes.len()];
-        for i in &fragments {
-            flags[*i] = true;
-        }
-        flags
-    };
-    let fragment_pairs = analyze::candidate_pairs(&features, &is_fragment);
-    let clusters = analyze::topic_clusters(
-        &fragments,
-        &fragment_pairs,
-        &similarity,
-        settings.topic_similarity,
-        settings.topic_min_notes.max(2),
-    );
-    let mut planned_paths: HashSet<String> = HashSet::new();
-    for members in clusters {
-        let words = analyze::naming_words(&features, &members, 3);
-        let group: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
-        let mut title = match analyze::naming_title(&group, &features, &members) {
-            Some(phrase) => compose::title_from_words(&[phrase]),
-            None => compose::title_from_words(&words),
-        };
-        let mut summary = compose::extract_summary(&group, &words, 2);
-        if let (Some(model), true) = (model, model_budget > 0) {
-            model_budget -= 1;
-            match name_topic(model, &group) {
-                Ok((better_title, better_summary)) => {
-                    title = better_title;
-                    summary = better_summary;
+    if let Some(judge) = &judge {
+        // Loose candidates: notes sharing much of their vocabulary. The model decides which
+        // really say the same thing, and writes the merged note.
+        let mut loose = analyze::UnionFind::new(notes.len());
+        let mut strength: HashMap<usize, f64> = HashMap::new();
+        for (a, b) in analyze::candidate_pairs(&features, &allowed) {
+            let cos = analyze::cosine(&features[a].vector, &features[b].vector);
+            if cos >= LOOSE_DUPLICATE {
+                loose.union(a, b);
+                for i in [a, b] {
+                    let best = strength.entry(i).or_default();
+                    *best = best.max(cos);
                 }
-                Err(error) => model_notes.push(format!("Topic title: {error}")),
             }
         }
-        let folder = majority_folder(&group);
-        let stem = fsx::safe_stem(&title);
-        let name = fsx::free_name(&stem, "md", |candidate| {
-            let rel = join(&folder, candidate);
-            nb.exists(&rel) || planned_paths.contains(&rel)
+        let mut candidates: Vec<Vec<usize>> = Vec::new();
+        for mut group in loose.groups().into_iter().filter(|g| g.len() >= 2) {
+            // A long chain is judged in parts, closest notes together.
+            group.sort_by(|x, y| strength[y].total_cmp(&strength[x]));
+            candidates.extend(
+                group
+                    .chunks(6)
+                    .filter(|c| c.len() >= 2)
+                    .map(<[usize]>::to_vec),
+            );
+        }
+        let skips = skipped(nb);
+        candidates.retain(|group| {
+            let mut paths: Vec<String> = group.iter().map(|i| notes[*i].path.clone()).collect();
+            paths.sort();
+            !skips.contains(&format!("{:?}:{}", Kind::Merge, paths.join("|")))
         });
-        let path = join(&folder, &name);
-        planned_paths.insert(path.clone());
-        let text = compose::topic(&title, &summary, &group, now);
-        let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
-        proposals.push(Proposal {
-            id: String::new(),
-            kind: Kind::Topic,
-            title: format!("Gather {} short notes into \"{title}\"", group.len()),
-            reason: format!(
-                "{} short notes are about the same subject but live apart. One topic note keeps everything they say, in date order, and answers to their old titles.",
-                group.len()
-            ),
-            notes: group.iter().map(|n| n.path.clone()).collect(),
-            notes_removed: group.len() - 1,
-            bytes_freed: freed,
-            disk_freed: 0,
-            preview: Some(text),
-            status: Status::Pending,
-            entry: None,
-            error: None,
-            plan: Plan::Topic {
-                path,
-                title,
-                summary,
-                fragments: group.iter().map(|n| n.path.clone()).collect(),
-            },
+        let best = |g: &Vec<usize>| g.iter().map(|i| strength[i]).fold(0.0, f64::max);
+        candidates.sort_by(|x, y| best(y).total_cmp(&best(x)));
+        let decided = ai::in_parallel(&candidates, |group| {
+            let members: Vec<&Note> = group.iter().map(|i| &notes[*i]).collect();
+            let links: Vec<usize> = group
+                .iter()
+                .map(|i| inbound.get(&notes[*i].path).map_or(0, Vec::len))
+                .collect();
+            ai::merges(judge, &members, &links, &used_keys)
         });
-        claimed.extend(members);
-    }
-
-    // 2b. Threads: AI sessions that continued the same piece of work, gathered into one note.
-    let sessions: Vec<usize> = (0..notes.len())
-        .filter(|i| !claimed.contains(i) && allowed[*i] && notes[*i].note_type() == "ai-session")
-        .collect();
-    let mut threads = analyze::UnionFind::new(notes.len());
-    for (k, a) in sessions.iter().enumerate() {
-        for b in &sessions[k + 1..] {
-            let (na, nb_) = (&notes[*a], &notes[*b]);
-            if na.front.text("project") == nb_.front.text("project")
-                && same_thread(&na.title, &nb_.title)
+        for (group, merges) in candidates.iter().zip(decided) {
+            for merge in merges {
+                let keep = group[merge.keep];
+                let absorb: Vec<usize> = merge.absorb.iter().map(|i| group[*i]).collect();
+                let absorbed: Vec<&Note> = absorb.iter().map(|i| &notes[*i]).collect();
+                // Front matter as the offline merge makes it (aliases, tags); the model's body.
+                let base = compose::merge(&notes[keep], &absorbed, now);
+                let head_end = crate::frontmatter::parse(&base).body_start;
+                let merged = format!("{}{}", &base[..head_end], merge.body);
+                let mut all: Vec<&Note> = vec![&notes[keep]];
+                all.extend(absorbed.iter().copied());
+                let freed = all.iter().map(|n| n.size as i64).sum::<i64>() - merged.len() as i64;
+                let names: Vec<String> = absorbed
+                    .iter()
+                    .map(|n| format!("\"{}\"", n.title))
+                    .collect();
+                proposals.push(Proposal {
+                    id: String::new(),
+                    kind: Kind::Merge,
+                    title: format!("Merge {} into \"{}\"", names.join(", "), notes[keep].title),
+                    reason: if merge.reason.is_empty() {
+                        "They say the same thing.".into()
+                    } else {
+                        merge.reason
+                    },
+                    notes: all.iter().map(|n| n.path.clone()).collect(),
+                    notes_removed: absorb.len(),
+                    bytes_freed: freed,
+                    disk_freed: 0,
+                    preview: Some(merged.clone()),
+                    status: Status::Pending,
+                    entry: None,
+                    error: None,
+                    plan: Plan::Merge {
+                        keep: notes[keep].path.clone(),
+                        absorb: absorbed.iter().map(|n| n.path.clone()).collect(),
+                        text: Some(merged),
+                    },
+                    sources: fingerprint(&all),
+                });
+                claimed.insert(keep);
+                claimed.extend(absorb);
+            }
+        }
+    } else {
+        let mut groups = analyze::UnionFind::new(notes.len());
+        let mut best_similarity: HashMap<(usize, usize), f64> = HashMap::new();
+        for (a, b) in analyze::candidate_pairs(&features, &allowed) {
+            if let Some(similarity) =
+                analyze::duplicates(&features[a], &features[b], settings.duplicate_similarity)
             {
-                threads.union(*a, *b);
+                groups.union(a, b);
+                best_similarity.insert((a, b), similarity);
             }
         }
-    }
-    for members in threads.groups() {
-        // A thread still being worked on waits until it has been quiet for a few days.
-        let newest = members
-            .iter()
-            .map(|i| notes[*i].touched)
-            .max()
-            .unwrap_or(now);
-        if now - newest < Duration::days(3) {
-            continue;
+        for group in groups.groups() {
+            let keep = *group
+                .iter()
+                .max_by(|a, b| {
+                    let score = |i: &usize| {
+                        let note = &notes[*i];
+                        (
+                            inbound.get(&note.path).map_or(0, Vec::len),
+                            (note.status() != "inbox") as u8,
+                            features[*i].words,
+                            note.touched,
+                        )
+                    };
+                    score(a).cmp(&score(b)).then(b.cmp(a))
+                })
+                .expect("a group has members");
+            let absorb: Vec<usize> = group.iter().copied().filter(|i| *i != keep).collect();
+            let similarity = group
+                .iter()
+                .flat_map(|a| group.iter().map(move |b| (*a, *b)))
+                .filter_map(|pair| best_similarity.get(&pair))
+                .fold(0.0f64, |acc, s| acc.max(*s));
+            let absorbed: Vec<&Note> = absorb.iter().map(|i| &notes[*i]).collect();
+            let merged = compose::merge(&notes[keep], &absorbed, now);
+            let freed = absorbed.iter().map(|n| n.size as i64).sum::<i64>()
+                + notes[keep].size as i64
+                - merged.len() as i64;
+            let names: Vec<String> = absorbed
+                .iter()
+                .map(|n| format!("\"{}\"", n.title))
+                .collect();
+            proposals.push(Proposal {
+                id: String::new(),
+                kind: Kind::Merge,
+                title: if absorbed.iter().all(|n| n.title == notes[keep].title) {
+                    format!("Merge {} copies of \"{}\"", group.len(), notes[keep].title)
+                } else {
+                    format!("Merge {} into \"{}\"", names.join(", "), notes[keep].title)
+                },
+                reason: format!(
+                    "{} say the same thing ({:.0}% alike). The copy with the most links stays; what the others add is kept under it, and their titles become aliases.",
+                    if group.len() == 2 { "Both notes".to_owned() } else { format!("These {} notes", group.len()) },
+                    similarity * 100.0
+                ),
+                notes: group.iter().map(|i| notes[*i].path.clone()).collect(),
+                notes_removed: absorb.len(),
+                bytes_freed: freed,
+                disk_freed: 0,
+                preview: Some(merged),
+                status: Status::Pending,
+                entry: None,
+                error: None,
+                plan: Plan::Merge {
+                    keep: notes[keep].path.clone(),
+                    absorb: absorbed.iter().map(|n| n.path.clone()).collect(),
+                    text: None,
+                },
+                sources: Vec::new(),
+            });
+            claimed.extend(group);
         }
-        let group: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
-        let title = thread_title(&group);
-        let folder = group[0].folder().to_owned();
-        let stem = fsx::safe_stem(&title);
-        let name = fsx::free_name(&stem, "md", |candidate| {
-            let rel = join(&folder, candidate);
-            nb.exists(&rel) || planned_paths.contains(&rel)
-        });
-        let path = join(&folder, &name);
-        planned_paths.insert(path.clone());
-        let summary = format!(
-            "{} AI sessions on this, from {} to {}.",
-            group.len(),
-            group
-                .iter()
-                .filter_map(|n| n.created)
-                .min()
-                .unwrap_or(now)
-                .format("%Y-%m-%d"),
-            group
-                .iter()
-                .filter_map(|n| n.created)
-                .max()
-                .unwrap_or(now)
-                .format("%Y-%m-%d"),
-        );
-        let text = compose::topic(&title, &summary, &group, now);
-        let text = crate::frontmatter::set(
-            &text,
-            "type",
-            &crate::frontmatter::Value::Text("ai-thread".into()),
-        );
-        let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
-        proposals.push(Proposal {
-            id: String::new(),
-            kind: Kind::Topic,
-            title: format!("Gather {} AI sessions into \"{title}\"", group.len()),
-            reason: format!(
-                "{} sessions continued the same piece of work. One note keeps each session's question, outcome, files and commands, in date order.",
-                group.len()
-            ),
-            notes: group.iter().map(|n| n.path.clone()).collect(),
-            notes_removed: group.len() - 1,
-            bytes_freed: freed,
-            disk_freed: 0,
-            preview: Some(text),
-            status: Status::Pending,
-            entry: None,
-            error: None,
-            plan: Plan::Topic {
-                path,
-                title,
-                summary,
-                fragments: group.iter().map(|n| n.path.clone()).collect(),
-            },
-        });
-        claimed.extend(members);
     }
 
-    // 3. Retire: notes finished long ago, never used, or empty.
+    // 2. Topics: short notes circling one subject, gathered into one note. Threads: AI
+    //    sessions that continued the same piece of work.
+    if let Some(judge) = &judge {
+        let fragments: Vec<usize> = (0..notes.len())
+            .filter(|i| {
+                !claimed.contains(i)
+                    && allowed[*i]
+                    && features[*i].words <= settings.fragment_words
+                    && features[*i].words >= 3
+            })
+            .collect();
+        let tags: Vec<HashSet<String>> = notes
+            .iter()
+            .map(|n| {
+                n.front
+                    .tags()
+                    .into_iter()
+                    .map(|t| t.to_lowercase())
+                    .collect()
+            })
+            .collect();
+        let similarity = |a: usize, b: usize| {
+            analyze::cosine(&features[a].vector, &features[b].vector)
+                + if tags[a].is_disjoint(&tags[b]) {
+                    0.0
+                } else {
+                    0.1
+                }
+        };
+        let mut is_fragment = vec![false; notes.len()];
+        for i in &fragments {
+            is_fragment[*i] = true;
+        }
+        let pairs = analyze::candidate_pairs(&features, &is_fragment);
+        let mut tasks: Vec<(Vec<usize>, &str)> = analyze::topic_clusters(
+            &fragments,
+            &pairs,
+            &similarity,
+            settings.topic_similarity * LOOSE_TOPIC,
+            settings.topic_min_notes.max(2),
+        )
+        .into_iter()
+        .map(|members| (members.into_iter().take(12).collect(), ""))
+        .collect();
+        let in_tasks: HashSet<usize> = tasks.iter().flat_map(|(m, _)| m.iter().copied()).collect();
+        let sessions: Vec<usize> = (0..notes.len())
+            .filter(|i| {
+                !claimed.contains(i)
+                    && !in_tasks.contains(i)
+                    && allowed[*i]
+                    && notes[*i].note_type() == "ai-session"
+            })
+            .collect();
+        let mut threads = analyze::UnionFind::new(notes.len());
+        for (k, a) in sessions.iter().enumerate() {
+            for b in &sessions[k + 1..] {
+                let (na, nb_) = (&notes[*a], &notes[*b]);
+                let close =
+                    analyze::cosine(&features[*a].vector, &features[*b].vector) >= LOOSE_DUPLICATE;
+                if na.front.text("project") == nb_.front.text("project")
+                    && (same_thread(&na.title, &nb_.title) || close)
+                {
+                    threads.union(*a, *b);
+                }
+            }
+        }
+        for members in threads.groups().into_iter().filter(|g| g.len() >= 2) {
+            // A thread still being worked on waits until it has been quiet for a few days.
+            let newest = members
+                .iter()
+                .map(|i| notes[*i].touched)
+                .max()
+                .unwrap_or(now);
+            if now - newest >= Duration::days(3) {
+                tasks.push((members.into_iter().take(12).collect(), THREAD_HINT));
+            }
+        }
+        let skips = skipped(nb);
+        tasks.retain(|(members, _)| {
+            let mut paths: Vec<String> = members.iter().map(|i| notes[*i].path.clone()).collect();
+            paths.sort();
+            !skips.contains(&format!("{:?}:{}", Kind::Topic, paths.join("|")))
+        });
+        let decided = ai::in_parallel(&tasks, |(members, hint)| {
+            let group: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
+            ai::topic(judge, &group, hint, &used_keys)
+        });
+        let mut planned_paths: HashSet<String> = HashSet::new();
+        for ((members, hint), topic) in tasks.iter().zip(decided) {
+            let Some(topic) = topic else { continue };
+            let chosen: Vec<usize> = topic.members.iter().map(|i| members[*i]).collect();
+            if chosen.iter().any(|i| claimed.contains(i)) {
+                continue;
+            }
+            let group: Vec<&Note> = chosen.iter().map(|i| &notes[*i]).collect();
+            let thread = !hint.is_empty();
+            let folder = if thread {
+                group[0].folder().to_owned()
+            } else {
+                majority_folder(&group)
+            };
+            let name = fsx::free_name(&topic.title, "md", |candidate| {
+                let rel = join(&folder, candidate);
+                nb.exists(&rel) || planned_paths.contains(&rel)
+            });
+            let path = join(&folder, &name);
+            planned_paths.insert(path.clone());
+            let text = written_topic(
+                &topic.title,
+                &topic.summary,
+                &topic.body,
+                &group,
+                thread,
+                now,
+            );
+            let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
+            proposals.push(Proposal {
+                id: String::new(),
+                kind: Kind::Topic,
+                title: format!(
+                    "Gather {} {} into \"{}\"",
+                    group.len(),
+                    if thread { "AI sessions" } else { "notes" },
+                    topic.title
+                ),
+                reason: if topic.reason.is_empty() {
+                    "They're about the same subject.".into()
+                } else {
+                    topic.reason
+                },
+                notes: group.iter().map(|n| n.path.clone()).collect(),
+                notes_removed: group.len() - 1,
+                bytes_freed: freed,
+                disk_freed: 0,
+                preview: Some(text.clone()),
+                status: Status::Pending,
+                entry: None,
+                error: None,
+                plan: Plan::Topic {
+                    path,
+                    title: topic.title,
+                    summary: topic.summary,
+                    fragments: group.iter().map(|n| n.path.clone()).collect(),
+                    text: Some(text),
+                },
+                sources: fingerprint(&group),
+            });
+            claimed.extend(chosen);
+        }
+    } else {
+        // 2. Topics: short notes circling one subject, gathered into one note.
+        let fragments: Vec<usize> = (0..notes.len())
+            .filter(|i| {
+                !claimed.contains(i)
+                    && allowed[*i]
+                    && features[*i].words <= settings.fragment_words
+                    && features[*i].words >= 3
+            })
+            .collect();
+        let tags: Vec<HashSet<String>> = notes
+            .iter()
+            .map(|n| {
+                n.front
+                    .tags()
+                    .into_iter()
+                    .map(|t| t.to_lowercase())
+                    .collect()
+            })
+            .collect();
+        let similarity = |a: usize, b: usize| {
+            let shared_tag = !tags[a].is_disjoint(&tags[b]);
+            analyze::cosine(&features[a].vector, &features[b].vector)
+                + if shared_tag { 0.1 } else { 0.0 }
+        };
+        let is_fragment: Vec<bool> = {
+            let mut flags = vec![false; notes.len()];
+            for i in &fragments {
+                flags[*i] = true;
+            }
+            flags
+        };
+        let fragment_pairs = analyze::candidate_pairs(&features, &is_fragment);
+        let clusters = analyze::topic_clusters(
+            &fragments,
+            &fragment_pairs,
+            &similarity,
+            settings.topic_similarity,
+            settings.topic_min_notes.max(2),
+        );
+        let mut planned_paths: HashSet<String> = HashSet::new();
+        for members in clusters {
+            let words = analyze::naming_words(&features, &members, 3);
+            let group: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
+            let title = match analyze::naming_title(&group, &features, &members) {
+                Some(phrase) => compose::title_from_words(&[phrase]),
+                None => compose::title_from_words(&words),
+            };
+            let summary = compose::extract_summary(&group, &words, 2);
+            let folder = majority_folder(&group);
+            let stem = fsx::safe_stem(&title);
+            let name = fsx::free_name(&stem, "md", |candidate| {
+                let rel = join(&folder, candidate);
+                nb.exists(&rel) || planned_paths.contains(&rel)
+            });
+            let path = join(&folder, &name);
+            planned_paths.insert(path.clone());
+            let text = compose::topic(&title, &summary, &group, now);
+            let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
+            proposals.push(Proposal {
+                id: String::new(),
+                kind: Kind::Topic,
+                title: format!("Gather {} short notes into \"{title}\"", group.len()),
+                reason: format!(
+                    "{} short notes are about the same subject but live apart. One topic note keeps everything they say, in date order, and answers to their old titles.",
+                    group.len()
+                ),
+                notes: group.iter().map(|n| n.path.clone()).collect(),
+                notes_removed: group.len() - 1,
+                bytes_freed: freed,
+                disk_freed: 0,
+                preview: Some(text),
+                status: Status::Pending,
+                entry: None,
+                error: None,
+                plan: Plan::Topic {
+                    path,
+                    title,
+                    summary,
+                    fragments: group.iter().map(|n| n.path.clone()).collect(),
+                    text: None,
+                },
+                sources: Vec::new(),
+            });
+            claimed.extend(members);
+        }
+
+        // 2b. Threads: AI sessions that continued the same piece of work, gathered into one note.
+        let sessions: Vec<usize> = (0..notes.len())
+            .filter(|i| {
+                !claimed.contains(i) && allowed[*i] && notes[*i].note_type() == "ai-session"
+            })
+            .collect();
+        let mut threads = analyze::UnionFind::new(notes.len());
+        for (k, a) in sessions.iter().enumerate() {
+            for b in &sessions[k + 1..] {
+                let (na, nb_) = (&notes[*a], &notes[*b]);
+                if na.front.text("project") == nb_.front.text("project")
+                    && same_thread(&na.title, &nb_.title)
+                {
+                    threads.union(*a, *b);
+                }
+            }
+        }
+        for members in threads.groups() {
+            // A thread still being worked on waits until it has been quiet for a few days.
+            let newest = members
+                .iter()
+                .map(|i| notes[*i].touched)
+                .max()
+                .unwrap_or(now);
+            if now - newest < Duration::days(3) {
+                continue;
+            }
+            let group: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
+            let title = thread_title(&group);
+            let folder = group[0].folder().to_owned();
+            let stem = fsx::safe_stem(&title);
+            let name = fsx::free_name(&stem, "md", |candidate| {
+                let rel = join(&folder, candidate);
+                nb.exists(&rel) || planned_paths.contains(&rel)
+            });
+            let path = join(&folder, &name);
+            planned_paths.insert(path.clone());
+            let summary = format!(
+                "{} AI sessions on this, from {} to {}.",
+                group.len(),
+                group
+                    .iter()
+                    .filter_map(|n| n.created)
+                    .min()
+                    .unwrap_or(now)
+                    .format("%Y-%m-%d"),
+                group
+                    .iter()
+                    .filter_map(|n| n.created)
+                    .max()
+                    .unwrap_or(now)
+                    .format("%Y-%m-%d"),
+            );
+            let text = compose::topic(&title, &summary, &group, now);
+            let text = crate::frontmatter::set(
+                &text,
+                "type",
+                &crate::frontmatter::Value::Text("ai-thread".into()),
+            );
+            let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
+            proposals.push(Proposal {
+                id: String::new(),
+                kind: Kind::Topic,
+                title: format!("Gather {} AI sessions into \"{title}\"", group.len()),
+                reason: format!(
+                    "{} sessions continued the same piece of work. One note keeps each session's question, outcome, files and commands, in date order.",
+                    group.len()
+                ),
+                notes: group.iter().map(|n| n.path.clone()).collect(),
+                notes_removed: group.len() - 1,
+                bytes_freed: freed,
+                disk_freed: 0,
+                preview: Some(text),
+                status: Status::Pending,
+                entry: None,
+                error: None,
+                plan: Plan::Topic {
+                    path,
+                    title,
+                    summary,
+                    fragments: group.iter().map(|n| n.path.clone()).collect(),
+                    text: None,
+                },
+                sources: Vec::new(),
+            });
+            claimed.extend(members);
+        }
+    }
+
+    // 3. Retire: notes finished long ago, never used, or empty. With a model, these are only
+    //    candidates: it keeps what's still worth having.
+    let archive_from = proposals.len();
     for (index, note) in notes.iter().enumerate() {
         if claimed.contains(&index) || protected(note) {
             continue;
@@ -564,7 +825,43 @@ pub fn run_in(
                 plan: Plan::Archive {
                     path: note.path.clone(),
                 },
+                sources: Vec::new(),
             });
+        }
+    }
+
+    if let Some(judge) = &judge {
+        let candidates: Vec<Proposal> = proposals.drain(archive_from..).collect();
+        let skips = skipped(nb);
+        let candidates: Vec<Proposal> = candidates
+            .into_iter()
+            .filter(|p| !skips.contains(&signature(p)))
+            .collect();
+        let found: Vec<(&Note, String)> = candidates
+            .iter()
+            .filter_map(|p| {
+                notes
+                    .iter()
+                    .find(|n| n.path == p.notes[0])
+                    .map(|n| (n, p.reason.clone()))
+            })
+            .collect();
+        let batches: Vec<&[(&Note, String)]> = found.chunks(12).collect();
+        let decided = ai::in_parallel(&batches, |batch| ai::archive(judge, batch, &used_keys));
+        for (batch, chosen) in batches.iter().zip(decided) {
+            for (at, reason) in chosen {
+                let (note, rule) = &batch[at];
+                if let Some(mut proposal) =
+                    candidates.iter().find(|p| p.notes[0] == note.path).cloned()
+                {
+                    proposal.reason = if reason.is_empty() {
+                        rule.clone()
+                    } else {
+                        format!("{reason} ({})", rule.trim_end_matches('.'))
+                    };
+                    proposals.push(proposal);
+                }
+            }
         }
     }
 
@@ -605,6 +902,7 @@ pub fn run_in(
             entry: None,
             error: None,
             plan: Plan::Archive { path },
+            sources: Vec::new(),
         });
     }
 
@@ -619,47 +917,90 @@ pub fn run_in(
             .or_default()
             .push((name, *path));
     }
-    for note in &notes {
-        let mut seen = HashSet::new();
-        for target in &note.links {
-            if !seen.insert(target.to_lowercase()) || resolver.resolve(target).is_some() {
-                continue;
-            }
-            let last = target.rsplit('/').next().unwrap_or(target);
-            if last.contains('.') && !last.to_ascii_lowercase().ends_with(".md") {
-                continue;
-            }
-            let wanted = last.trim_end_matches(".md").to_lowercase();
-            if wanted.chars().count() < 4 {
-                continue;
-            }
-            let limit = if wanted.chars().count() >= 8 { 2 } else { 1 };
-            let first = wanted.chars().next();
-            let length = wanted.chars().count();
-            let mut matches: Vec<&str> = names_by_first
-                .get(&first)
-                .into_iter()
-                .flatten()
-                .filter(|(name, _)| name.chars().count().abs_diff(length) <= limit)
-                .filter(|(name, _)| text::within_edits(name, &wanted, limit))
-                .map(|(_, path)| *path)
-                .collect();
-            matches.sort();
-            matches.dedup();
-            if let [only] = matches.as_slice() {
-                let to = notes
+    if let Some(judge) = &judge {
+        let names: Vec<(&String, &str)> = resolver.names().map(|(n, p)| (n, *p)).collect();
+        let mut broken: Vec<ai::Broken> = Vec::new();
+        for note in &notes {
+            let mut seen = HashSet::new();
+            for target in &note.links {
+                if !seen.insert(target.to_lowercase()) || resolver.resolve(target).is_some() {
+                    continue;
+                }
+                let last = target.rsplit('/').next().unwrap_or(target);
+                if last.contains('.') && !last.to_ascii_lowercase().ends_with(".md") {
+                    continue;
+                }
+                let wanted = last.trim_end_matches(".md").to_lowercase();
+                if wanted.chars().count() < 3 {
+                    continue;
+                }
+                let wanted_words: HashSet<String> = text::words(&wanted).collect();
+                let mut options: Vec<(usize, String)> = names
                     .iter()
-                    .find(|n| n.path == *only)
-                    .map(|n| n.stem().to_owned())
-                    .unwrap_or_default();
+                    .filter_map(|(name, path)| {
+                        let shown = notes
+                            .iter()
+                            .find(|n| n.path == *path)
+                            .map(|n| n.stem().to_owned())?;
+                        let name_words: HashSet<String> = text::words(name).collect();
+                        let shared = wanted_words.intersection(&name_words).count();
+                        let rank = if text::within_edits(name, &wanted, 3) {
+                            0
+                        } else if name.contains(&wanted) || wanted.contains(name.as_str()) {
+                            1
+                        } else if shared * 2 >= wanted_words.len().max(1) && shared > 0 {
+                            2
+                        } else {
+                            return None;
+                        };
+                        Some((rank, shown))
+                    })
+                    .collect();
+                options.sort();
+                let mut unique: Vec<String> = Vec::new();
+                for (_, name) in options {
+                    if !unique.contains(&name) {
+                        unique.push(name);
+                    }
+                }
+                unique.truncate(6);
+                if unique.is_empty() {
+                    continue;
+                }
+                let context = note
+                    .text
+                    .lines()
+                    .find(|line| line.contains(target.as_str()))
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(300)
+                    .collect();
+                broken.push(ai::Broken {
+                    note,
+                    target: target.clone(),
+                    context,
+                    options: unique,
+                });
+            }
+        }
+        let batches: Vec<&[ai::Broken]> = broken.chunks(15).collect();
+        let decided = ai::in_parallel(&batches, |batch| ai::links(judge, batch, &used_keys));
+        for (batch, fixes) in batches.iter().zip(decided) {
+            for (at, to, reason) in fixes {
+                let item = &batch[at];
+                let target = &item.target;
+                let note = item.note;
                 proposals.push(Proposal {
                     id: String::new(),
                     kind: Kind::FixLink,
                     title: format!("Point [[{target}]] in \"{}\" at [[{to}]]", note.title),
-                    reason: format!(
-                        "No note is called \"{target}\"; \"{to}\" is the only close match."
-                    ),
-                    notes: vec![note.path.clone(), (*only).to_owned()],
+                    reason: if reason.is_empty() {
+                        format!("No note is called \"{target}\".")
+                    } else {
+                        reason
+                    },
+                    notes: vec![note.path.clone()],
                     notes_removed: 0,
                     bytes_freed: 0,
                     disk_freed: 0,
@@ -672,7 +1013,67 @@ pub fn run_in(
                         from: target.clone(),
                         to,
                     },
+                    sources: Vec::new(),
                 });
+            }
+        }
+    } else {
+        for note in &notes {
+            let mut seen = HashSet::new();
+            for target in &note.links {
+                if !seen.insert(target.to_lowercase()) || resolver.resolve(target).is_some() {
+                    continue;
+                }
+                let last = target.rsplit('/').next().unwrap_or(target);
+                if last.contains('.') && !last.to_ascii_lowercase().ends_with(".md") {
+                    continue;
+                }
+                let wanted = last.trim_end_matches(".md").to_lowercase();
+                if wanted.chars().count() < 4 {
+                    continue;
+                }
+                let limit = if wanted.chars().count() >= 8 { 2 } else { 1 };
+                let first = wanted.chars().next();
+                let length = wanted.chars().count();
+                let mut matches: Vec<&str> = names_by_first
+                    .get(&first)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(name, _)| name.chars().count().abs_diff(length) <= limit)
+                    .filter(|(name, _)| text::within_edits(name, &wanted, limit))
+                    .map(|(_, path)| *path)
+                    .collect();
+                matches.sort();
+                matches.dedup();
+                if let [only] = matches.as_slice() {
+                    let to = notes
+                        .iter()
+                        .find(|n| n.path == *only)
+                        .map(|n| n.stem().to_owned())
+                        .unwrap_or_default();
+                    proposals.push(Proposal {
+                        id: String::new(),
+                        kind: Kind::FixLink,
+                        title: format!("Point [[{target}]] in \"{}\" at [[{to}]]", note.title),
+                        reason: format!(
+                            "No note is called \"{target}\"; \"{to}\" is the only close match."
+                        ),
+                        notes: vec![note.path.clone(), (*only).to_owned()],
+                        notes_removed: 0,
+                        bytes_freed: 0,
+                        disk_freed: 0,
+                        preview: None,
+                        status: Status::Pending,
+                        entry: None,
+                        error: None,
+                        plan: Plan::FixLink {
+                            note: note.path.clone(),
+                            from: target.clone(),
+                            to,
+                        },
+                        sources: Vec::new(),
+                    });
+                }
             }
         }
     }
@@ -692,6 +1093,24 @@ pub fn run_in(
         .collect();
     if !settling.is_empty() {
         let search = crate::search::Index::build(&notes, Vec::new());
+        let mut unsettled: Vec<ai::Unsettled> = Vec::new();
+        let all_folders: Vec<String> = {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for n in &notes {
+                let folder = n.folder();
+                if !folder.is_empty()
+                    && folder != places.inbox
+                    && !folder.starts_with(&format!("{}/", places.inbox))
+                    && !folder.starts_with(&places.ai_folder)
+                    && !folder.contains("attachments")
+                {
+                    *counts.entry(format!("{folder}/")).or_default() += 1;
+                }
+            }
+            let mut list: Vec<(String, usize)> = counts.into_iter().collect();
+            list.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            list.into_iter().map(|(f, _)| f).collect()
+        };
         // (folder, home) and the notes going there, each with why.
         type Place = (Option<String>, Option<String>);
         let mut groups: Vec<(Place, Vec<(String, String)>)> = Vec::new();
@@ -724,6 +1143,51 @@ pub fn run_in(
             } else {
                 None
             };
+            if from_model.is_none() && judge.is_some() {
+                // Asked below, with every note that needs a home in one go.
+                let offered =
+                    crate::filing::suggest(&search, &note.path, &places.inbox, &places.ai_folder);
+                let mut homes: Vec<String> = offered
+                    .iter()
+                    .filter(|h| h.kind == "note")
+                    .filter_map(|h| {
+                        notes
+                            .iter()
+                            .find(|n| n.path == h.target)
+                            .map(|n| n.stem().to_owned())
+                    })
+                    .collect();
+                for home in notes
+                    .iter()
+                    .filter(|n| n.is_home() && !n.path.starts_with(&format!("{}/", places.inbox)))
+                {
+                    if homes.len() >= 12 {
+                        break;
+                    }
+                    if !homes.contains(&home.stem().to_owned()) {
+                        homes.push(home.stem().to_owned());
+                    }
+                }
+                let mut folders: Vec<String> = offered
+                    .iter()
+                    .filter(|h| h.kind == "folder" && !h.target.is_empty())
+                    .map(|h| format!("{}/", h.target))
+                    .collect();
+                for folder in &all_folders {
+                    if folders.len() >= 25 {
+                        break;
+                    }
+                    if !folders.contains(folder) {
+                        folders.push(folder.clone());
+                    }
+                }
+                unsettled.push(ai::Unsettled {
+                    note,
+                    homes,
+                    folders,
+                });
+                continue;
+            }
             let choice = from_model.or_else(|| {
                 let homes =
                     crate::filing::suggest(&search, &note.path, &places.inbox, &places.ai_folder);
@@ -750,6 +1214,30 @@ pub fn run_in(
             match groups.iter_mut().find(|(p, _)| *p == place) {
                 Some((_, members)) => members.push((note.path.clone(), why)),
                 None => groups.push((place, vec![(note.path.clone(), why)])),
+            }
+        }
+        if let Some(judge) = &judge {
+            let batches: Vec<&[ai::Unsettled]> = unsettled.chunks(10).collect();
+            let decided = ai::in_parallel(&batches, |batch| ai::homes(judge, batch, &used_keys));
+            for (batch, placed) in batches.iter().zip(decided) {
+                for (at, is_home, name, why) in placed {
+                    let note = batch[at].note;
+                    let place = if is_home {
+                        match notes.iter().find(|n| n.stem() == name && n.is_home()) {
+                            Some(home) => (None, Some(home.path.clone())),
+                            None => continue,
+                        }
+                    } else {
+                        (Some(name.trim_matches('/').to_owned()), None)
+                    };
+                    if place.0.as_deref() == Some(note.folder()) {
+                        continue;
+                    }
+                    match groups.iter_mut().find(|(p, _)| *p == place) {
+                        Some((_, members)) => members.push((note.path.clone(), why)),
+                        None => groups.push((place, vec![(note.path.clone(), why)])),
+                    }
+                }
             }
         }
         for ((folder, home), members) in groups {
@@ -809,6 +1297,7 @@ pub fn run_in(
                     home,
                     paths: members.into_iter().map(|(p, _)| p).collect(),
                 },
+                sources: Vec::new(),
             });
         }
     }
@@ -862,22 +1351,48 @@ pub fn run_in(
                 items: old_items.iter().map(|item| item.id.clone()).collect(),
                 journal: old_entries.iter().map(|entry| entry.id.clone()).collect(),
             },
+            sources: Vec::new(),
         });
     }
 
+    if let Some(judge) = &judge {
+        judge.save(&used_keys.lock().expect("used lock"));
+        let errors = judge.errors.lock().expect("errors lock").clone();
+        let mut seen = HashSet::new();
+        for error in errors {
+            if seen.insert(error.clone()) {
+                model_notes.push(error);
+            }
+        }
+    }
     let skips = skipped(nb);
     proposals.retain(|proposal| !skips.contains(&signature(proposal)));
     for (n, proposal) in proposals.iter_mut().enumerate() {
         proposal.id = format!("p{}", n + 1);
     }
-    let summary = summarize(&before, &proposals);
+    let mut summary = summarize(&before, &proposals);
+    if let Some(judge) = &judge
+        && !model_notes.is_empty()
+    {
+        let asked = judge.asked.load(std::sync::atomic::Ordering::SeqCst);
+        summary = format!(
+            "{summary} The model couldn't answer {} of {asked} questions ({}), so some candidates wait for the next night.",
+            model_notes.len().min(asked),
+            model_notes[0]
+        );
+    }
     let report = Report {
         id: journal::new_id(),
         ran_at: now,
         took_ms: started.elapsed().as_millis(),
         before,
         proposals,
-        model: model.map(|_| "on".to_owned()),
+        model: judge.as_ref().map(|j| {
+            format!(
+                "{} questions",
+                j.asked.load(std::sync::atomic::Ordering::SeqCst)
+            )
+        }),
         model_notes,
         summary,
     };
@@ -952,26 +1467,51 @@ fn majority_folder(notes: &[&Note]) -> String {
         .unwrap_or_default()
 }
 
-fn name_topic(model: &Model, group: &[&Note]) -> Result<(String, String)> {
-    let mut material = String::new();
-    for note in group {
-        material.push_str(&format!(
-            "### {}\n{}\n\n",
+/// A topic note the model wrote: front matter as gathering makes it, then its summary, body
+/// and where it was gathered from.
+fn written_topic(
+    title: &str,
+    summary: &str,
+    body: &str,
+    group: &[&Note],
+    thread: bool,
+    now: DateTime<Local>,
+) -> String {
+    let base = compose::topic(title, summary, group, now);
+    let base = if thread {
+        crate::frontmatter::set(
+            &base,
+            "type",
+            &crate::frontmatter::Value::Text("ai-thread".into()),
+        )
+    } else {
+        base
+    };
+    let head_end = crate::frontmatter::parse(&base).body_start;
+    let mut text = format!("{}# {title}\n", &base[..head_end]);
+    if !summary.trim().is_empty() {
+        text.push_str(&format!("\n> {}\n", summary.trim().replace('\n', "\n> ")));
+    }
+    text.push_str(&format!("\n{}\n\n## Gathered from\n\n", body.trim()));
+    let mut ordered: Vec<&&Note> = group.iter().collect();
+    ordered.sort_by_key(|n| n.created.unwrap_or(n.touched));
+    for note in ordered {
+        text.push_str(&format!(
+            "- {} ({})\n",
             note.title,
-            text::excerpt(note.body(), 1500)
+            note.created.unwrap_or(note.touched).format("%Y-%m-%d")
         ));
     }
-    let reply = model.complete(
-        "You name topic notes in a personal Markdown notebook. Reply with exactly two lines:\n\
-         TITLE: a short, specific title (2-6 words, no quotes, no trailing period)\n\
-         SUMMARY: one or two plain sentences saying what these notes, together, establish. Use only what the notes say.",
-        &format!("These notes are being gathered into one topic note:\n\n{material}"),
-    )?;
-    let title =
-        model::field(&reply, "title").ok_or_else(|| Error::msg("the model gave no title"))?;
-    let summary = model::field(&reply, "summary").unwrap_or_default();
-    Ok((fsx::safe_stem(&title), summary))
+    text
 }
+
+/// Notes this alike in vocabulary are shown to the model as possible duplicates.
+const LOOSE_DUPLICATE: f64 = 0.3;
+/// With a model, fragments are clustered this much more loosely than the offline threshold.
+const LOOSE_TOPIC: f64 = 0.7;
+const THREAD_HINT: &str = "These are notes of AI coding sessions in one project. Gather the ones that continued the same piece \
+of work into one thread note: what was being done, how it went session by session, where it ended, and the files and \
+commands that mattered.";
 
 pub fn human_bytes(bytes: u64) -> String {
     let b = bytes as f64;
@@ -1233,11 +1773,24 @@ fn execute(
     let find = |path: &str| notes.iter().find(|n| n.path == path);
     let missing = |paths: &[String]| paths.iter().find(|p| find(p).is_none()).cloned();
     let mut index = Index::load(nb);
+    // A model-written note is applied as previewed, only if its notes are as they were.
+    for (path, hash) in &proposal.sources {
+        match find(path) {
+            Some(note) if text::fnv(note.text.as_bytes()) == *hash => {}
+            Some(note) => {
+                return Err(Outcome::Outdated(format!(
+                    "\"{}\" changed since Dream wrote this; it'll be looked at again tonight",
+                    note.title
+                )));
+            }
+            None => return Err(Outcome::Outdated(format!("{path} is gone"))),
+        }
+    }
     let mut tx = Transaction::begin(nb, proposal.title.clone(), "dream")?;
     match &proposal.plan {
         // Settling files each note in this same change, below.
         Plan::Settle { .. } => {}
-        Plan::Merge { keep, absorb } => {
+        Plan::Merge { keep, absorb, text } => {
             let mut all = vec![keep.clone()];
             all.extend(absorb.iter().cloned());
             if let Some(gone) = missing(&all) {
@@ -1245,7 +1798,9 @@ fn execute(
             }
             let keep_note = find(keep).expect("checked");
             let absorbed: Vec<&Note> = absorb.iter().filter_map(|p| find(p)).collect();
-            let merged = compose::merge(keep_note, &absorbed, now);
+            let merged = text
+                .clone()
+                .unwrap_or_else(|| compose::merge(keep_note, &absorbed, now));
             let gone: HashSet<String> = absorb.iter().cloned().collect();
             retarget_all(&mut tx, &notes, &gone, keep, Some((keep.as_str(), merged)))?;
             for note in absorbed {
@@ -1263,12 +1818,15 @@ fn execute(
             title,
             summary,
             fragments,
+            text: written,
         } => {
             if let Some(gone) = missing(fragments) {
                 return Err(Outcome::Outdated(format!("{gone} is gone")));
             }
             let group: Vec<&Note> = fragments.iter().filter_map(|p| find(p)).collect();
-            let text = compose::topic(title, summary, &group, now);
+            let text = written
+                .clone()
+                .unwrap_or_else(|| compose::topic(title, summary, &group, now));
             let path = if nb.exists(path) {
                 let (folder, name) = path.rsplit_once('/').unwrap_or(("", path));
                 let stem = name.trim_end_matches(".md");
@@ -1388,7 +1946,7 @@ fn execute(
     index.save(&mut tx)?;
     let entry = tx.commit()?;
     let mut usage = Usage::load(nb);
-    if let Plan::Merge { keep, absorb } = &proposal.plan {
+    if let Plan::Merge { keep, absorb, .. } = &proposal.plan {
         for gone in absorb {
             usage.renamed(gone, keep);
         }

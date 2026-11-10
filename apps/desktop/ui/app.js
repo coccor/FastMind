@@ -803,10 +803,9 @@ async function loadSettings() {
       $("#agent-claude").textContent = agents.claude_code;
       $("#agent-codex").textContent = agents.codex;
     }).catch(() => {});
-    form.provider.value = settings.model.provider || "none";
+    form.provider.value = settings.model.provider || "claude-code";
     form.model.value = settings.model.model || "";
     form.base_url.value = settings.model.base_url || "";
-    form.write_enabled.checked = settings.writing.enabled;
     form.write_instructions.value = settings.writing.instructions || "";
     showModelFields(form);
     form._settings = settings;
@@ -840,17 +839,22 @@ $("#settings-form").addEventListener("submit", async (event) => {
   });
   const provider = form.provider.value;
   s.model =
-    provider === "none" ? { provider: "none" }
-    : provider === "local" ? { provider: "local", model: form.model.value.trim() || "llama3.2", base_url: form.base_url.value.trim() || "http://localhost:11434/v1" }
+    provider === "local" ? { provider: "local", model: form.model.value.trim() || "llama3.2", base_url: form.base_url.value.trim() || "http://localhost:11434/v1" }
     : provider === "claude-code" ? { provider: "claude-code", model: form.model.value.trim() || "sonnet" }
     : { provider: "claude", model: form.model.value.trim() || "claude-opus-5-5" };
-  s.writing = { enabled: form.write_enabled.checked, instructions: form.write_instructions.value };
+  s.writing = { enabled: true, instructions: form.write_instructions.value };
   try {
+    if (JSON.stringify(s.model) !== JSON.stringify(form._settings.model)) {
+      $("#settings-saved").innerHTML = `<span class="spinner"></span> Checking the AI…`;
+      await call("model_check", { model: s.model });
+    }
     await call("settings_set", { settings: s });
+    form._settings = s;
     $("#settings-saved").textContent = "Saved.";
     setTimeout(() => ($("#settings-saved").textContent = ""), 2500);
     refreshStatus();
   } catch (error) {
+    $("#settings-saved").textContent = "";
     toast(String(error.message || error), true);
   }
 });
@@ -858,10 +862,8 @@ $("#settings-form").addEventListener("submit", async (event) => {
 // Only the fields the chosen provider uses, with its own default model as the hint.
 function showModelFields(form) {
   const provider = form.provider.value;
-  form.model.closest("label").hidden = provider === "none";
   form.base_url.closest("label").hidden = provider !== "local";
   form.model.placeholder = { local: "llama3.2", claude: "claude-opus-5-5", "claude-code": "sonnet" }[provider] || "";
-  $("#writing-fields").hidden = provider === "none";
 }
 $("#settings-form").provider.addEventListener("change", (event) => {
   const form = event.target.form;
@@ -1079,6 +1081,46 @@ function startCaptureOnly() {
 // First run: choose where the notes live before anything touches the disk.
 async function startWelcome(first) {
   $("#welcome").hidden = false;
+  // The AI: Claude Code when it's installed, else whatever is set up.
+  const models = [
+    { provider: "claude-code", model: "sonnet", name: "Claude Code", detail: first.claude_code ? "Found on this computer. Uses your Claude plan, no API key." : "Not found. Install it from claude.com/code, sign in, then come back.", ready: !!first.claude_code },
+    { provider: "claude", model: "claude-opus-5-5", name: "Claude API", detail: first.anthropic_key ? "ANTHROPIC_API_KEY is set." : "Needs ANTHROPIC_API_KEY set before FastMind starts.", ready: first.anthropic_key },
+    { provider: "local", model: "llama3.2", base_url: "http://localhost:11434/v1", name: "A model on this computer", detail: "Ollama, LM Studio or llama.cpp. Nothing leaves this computer.", ready: true },
+  ];
+  let model = models.find((m) => m.provider === first.model?.provider) || models.find((m) => m.ready) || models[0];
+  const modelBox = $("#welcome-models");
+  const showModels = () => {
+    modelBox.innerHTML = models.map((m, i) => `<button type="button" class="option${m === model ? " chosen" : ""}" data-i="${i}"${m.ready ? "" : ' aria-disabled="true"'}>
+      <span class="option-kind">${esc(m.name)}</span><span class="option-path muted">${esc(m.detail)}</span><span class="small">${m.ready ? "" : "not ready"}</span></button>`).join("");
+    $("#welcome-local").hidden = model.provider !== "local";
+  };
+  modelBox.addEventListener("click", (event) => {
+    const option = event.target.closest(".option");
+    if (!option) return;
+    model = models[Number(option.dataset.i)];
+    $("#welcome-check").textContent = "";
+    showModels();
+  });
+  showModels();
+  const chosenModel = () => model.provider === "local"
+    ? { provider: "local", model: $("#welcome-local-model").value.trim() || "llama3.2", base_url: $("#welcome-local-url").value.trim() || "http://localhost:11434/v1" }
+    : { provider: model.provider, model: model.model };
+  // Says whether the AI answers before anything is saved.
+  const checkModel = async () => {
+    const box = $("#welcome-check");
+    box.innerHTML = `<span class="spinner"></span> Checking ${esc(model.name)}…`;
+    try {
+      const { ms } = await call("model_check", { model: chosenModel() });
+      box.textContent = `✓ ${model.name} answered in ${(ms / 1000).toFixed(1)} s.`;
+      return true;
+    } catch (error) {
+      box.textContent = `${model.name} didn't answer: ${error.message || error}`;
+      return false;
+    }
+  };
+  // A notebook is already chosen: only the AI is missing.
+  $("#welcome-notebook").hidden = !first.needs_notebook;
+  $("#welcome-demo").hidden = !first.needs_notebook;
   const options = $("#welcome-options");
   let chosen = null;
   const pick = (path) => {
@@ -1114,7 +1156,16 @@ async function startWelcome(first) {
   $("#welcome-keys").innerHTML = `From anywhere: <kbd>${esc(key(first.hotkeys.capture))}</kbd> captures, <kbd>${esc(key(first.hotkeys.remember))}</kbd> searches your notes.`;
   const finish = async (path) => {
     try {
-      await call("setup", { notebook: path, ai: !$("#welcome-ai-row").hidden && $("#welcome-ai").checked });
+      if (!(await checkModel())) return;
+      if (!first.needs_notebook) {
+        const { settings } = await call("settings_get");
+        settings.model = chosenModel();
+        await call("settings_set", { settings });
+        $("#welcome").hidden = true;
+        startMain();
+        return;
+      }
+      await call("setup", { notebook: path, model: chosenModel(), ai: !$("#welcome-ai-row").hidden && $("#welcome-ai").checked });
       $("#welcome").hidden = true;
       startMain();
       if (!$("#welcome-ai-row").hidden && $("#welcome-ai").checked) call("ai_import").then(() => refreshStatus()).catch(() => {});
@@ -1124,11 +1175,15 @@ async function startWelcome(first) {
   };
   $("#welcome-start").addEventListener("click", () => {
     const path = ($("#welcome-path").value || chosen || "").trim();
-    if (!path) { toast("Choose a folder for your notes", true); return; }
+    if (!path && first.needs_notebook) { toast("Choose a folder for your notes", true); return; }
     finish(path);
   });
   $("#welcome-demo").addEventListener("click", async () => {
     try {
+      if (!(await checkModel())) return;
+      const { settings } = await call("settings_get");
+      settings.model = chosenModel();
+      await call("settings_set", { settings });
       await call("demo_create", {});
       $("#welcome").hidden = true;
       startMain();

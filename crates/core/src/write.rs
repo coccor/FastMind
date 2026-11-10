@@ -533,7 +533,7 @@ pub struct SuggestedHome {
 }
 
 /// The JSON in a reply: the reply itself, or from its first `{` to its last `}`.
-fn json_in(reply: &str) -> Result<Value> {
+pub fn json_in(reply: &str) -> Result<Value> {
     serde_json::from_str(reply.trim()).or_else(|_| {
         let (start, end) = (reply.find('{'), reply.rfind('}'));
         match (start, end) {

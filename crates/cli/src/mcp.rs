@@ -125,13 +125,16 @@ fn call_tool(app: &App, name: &str, args: &Value) -> Value {
                 .collect();
             tags.push("agent".into());
             let text = fastmind_core::sessions::redact(&format!("{title}\n\n{body}"));
-            app.call("capture", json!({ "text": text, "tags": tags }))
-                .map(|saved| {
-                    format!(
-                        "Saved to the inbox as {}",
-                        saved["path"].as_str().unwrap_or("")
-                    )
-                })
+            app.call(
+                "capture",
+                json!({ "text": text, "tags": tags, "as_written": true }),
+            )
+            .map(|saved| {
+                format!(
+                    "Saved to the inbox as {}",
+                    saved["path"].as_str().unwrap_or("")
+                )
+            })
         }
         other => Err(fastmind_core::Error::msg(format!("no tool called {other}"))),
     };

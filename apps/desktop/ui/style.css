@@ -233,6 +233,8 @@ legend { font-weight: 650; padding: 0 6px; }
 .welcome-options { display: flex; flex-direction: column; gap: 8px; }
 .option { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: center; text-align: left; padding: 10px 14px; border-radius: 10px; }
 .option.chosen { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.option[aria-disabled="true"] { opacity: 0.6; }
+#welcome-check { min-height: 1.4em; margin: 6px 0 4px; }
 .option-kind { font-weight: 600; font-size: 13px; }
 .option-path { font: 12.5px ui-monospace, monospace; word-break: break-all; }
 #welcome-other input { flex: 1; }

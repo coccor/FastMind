@@ -29,6 +29,9 @@ pub struct Capture {
     /// Write the note with the model before returning, instead of in the background.
     #[serde(default)]
     pub wait: bool,
+    /// Already written (an agent's finding, or saved with `--raw`): kept as it is.
+    #[serde(default)]
+    pub as_written: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

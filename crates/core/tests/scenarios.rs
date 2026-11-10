@@ -15,7 +15,7 @@ fn app_for(dir: &Path) -> App {
         notebook: Some(dir.to_path_buf()),
         ..Settings::default()
     };
-    App::ephemeral(settings)
+    App::ephemeral(settings).offline_for_tests()
 }
 
 fn demo_app() -> (tempfile::TempDir, App) {

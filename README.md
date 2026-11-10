@@ -42,7 +42,12 @@ and the memory your AI coding sessions never had.
 Your notes stay plain `.md` files with front matter, readable by any editor, Obsidian,
 [FastPad](https://github.com/coccor/FastPad) or an agent. FastMind keeps its own state in
 `.fastmind/` inside the notebook (Dream's proposals, the undo journal, the archive). There's no
-database to lose and no account, and nothing leaves your computer unless you choose a cloud model.
+database to lose and no account.
+
+FastMind runs on an AI you choose, and won't start without one: **Claude Code** (your Claude
+plan, no API key), the **Claude API** (`ANTHROPIC_API_KEY`), or **a model on your computer**
+(Ollama, LM Studio, llama.cpp), where nothing leaves the machine. The first run checks the AI
+answers before anything else; `fastmind model claude-code` does the same from a terminal.
 
 ## Try it
 
@@ -50,34 +55,42 @@ database to lose and no account, and nothing leaves your computer unless you cho
 cargo run -p fastmind-desktop
 ```
 
-The first run asks where your notes are. It finds Obsidian vaults and FastCapture notebooks,
+The first run asks which AI to use, then where your notes are. It finds Obsidian vaults and FastCapture notebooks,
 or makes `~/FastMind`. Choose **Try a demo notebook first** to see Dream work: a messy notebook
 with 22 notes that Dream proposes taking down to 10. [docs/scenarios.md](docs/scenarios.md)
 walks through every scenario.
 
 ## Dream: compression you can trust
 
-| Proposal | When | What happens |
-|---|---|---|
-| **Merge** | Most of one note's phrasing appears in another | The best-linked copy stays, with what only the others said added under it. Their titles become aliases, links follow, and the copies go to the archive. |
-| **Gather** | Three or more short notes share a subject, or AI sessions continue the same work | One note holds them in date order. The pieces go to the archive and links follow. |
-| **Archive** | Untouched, unlinked and unopened for 180 days, `done` for 30, empty, or an AI session unopened for 90. Also files nothing links to. | Moved to `.fastmind/archive/`: still searchable, ranked lower, and restored in one click. |
-| **Fix a link** | `[[Postgress vacuum]]` points nowhere and one note is that close | The link is corrected. |
-| **Pack** | Archived notes and undo records over 30 days old | Zipped into `.fastmind/archive/packs/`. Notes can still be restored from the pack. |
+Statistics find candidates, fast, across thousands of notes; the AI decides each one and
+writes the result. Every proposal carries the AI's reason, in a sentence about those notes.
+
+| Proposal | Candidates | The AI decides | What happens |
+|---|---|---|---|
+| **Merge** | Notes sharing much of their vocabulary | Which really say the same thing (not merely related), and writes the merged note, losing nothing | The best copy holds everything; the others' titles become aliases, links follow, and they go to the archive. |
+| **Gather** | Short notes near each other, or AI sessions in one project | Which form one subject, and writes a topic note organised by sub-subject | The pieces go to the archive and links follow. |
+| **Archive** | Unlinked, unopened for 180 days, `done` for 30, empty, or an AI session unopened for 90 | Whether each is still worth having (when in doubt, keep) | Moved to `.fastmind/archive/`: still searchable, restored in one click. Files nothing links to are archived by rule. |
+| **Fix a link** | `[[Postgress vacuum]]` points nowhere; notes with close or shared names | Which note it meant, from the link and its line, or none | The link is corrected. |
+| **Settle** | New memories (inbox notes) older than six hours | Where each belongs: the home it suggested when it wrote the note, or a folder or topic note | Moved there, linked from the topic note. Runs on its own. |
+| **Pack** | Archived notes and undo records over 30 days old | (rules only) | Zipped into `.fastmind/archive/packs/`. Notes can still be restored from the pack. |
 
 What keeps it safe:
 
-- It proposes; you decide. Only the kinds you allow run on their own (packing, by default).
+- It proposes; you decide. Only the kinds you allow run on their own (settling and packing,
+  by default). What you accept is exactly what you previewed: a merged or topic note the AI
+  wrote applies only while its notes are unchanged, else it waits for the next night.
   **Skip** means Dream won't propose that again, and **Keep forever** pins a note.
 - Every change goes through a journal. Undo puts the files back, but it refuses if you've
   edited them since.
 - Some notes are never touched: home notes (`type: topic`, `project`, `moc`), pinned notes,
   templates, records (daily notes, meetings, logs) and anything changed in the last two days.
-- Nothing is deleted, and it works offline. A model (a local server, or Claude) only writes
-  better titles, summaries and answers.
+- Nothing is deleted. Verdicts are remembered by the notes' contents, so a night with nothing
+  new asks the AI nothing again. If the AI can't answer, nothing is proposed in its place and
+  the report says why.
 
 It's tested against real-world shapes: templated meeting and daily notes are never mistaken for
-copies. On 5,000 notes Dream takes about 4 seconds and search about 20 ms.
+copies. On the 22-note demo, Dream with Claude Code takes about 20 seconds (three questions
+at a time); finding candidates in 5,000 notes takes about 4 seconds, and search about 20 ms.
 
 ## Keys
 
