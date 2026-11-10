@@ -150,7 +150,13 @@ pub struct Answer {
     pub note: Option<String>,
 }
 
-pub fn ask(nb: &Notebook, index: &Index, question: &str, model: Option<&Model>) -> Answer {
+pub fn ask(
+    nb: &Notebook,
+    index: &Index,
+    question: &str,
+    model: Option<&Model>,
+    preferences: &str,
+) -> Answer {
     let hits = search(nb, index, question, 6);
     if hits.is_empty() {
         return Answer {
@@ -184,16 +190,22 @@ pub fn ask(nb: &Notebook, index: &Index, question: &str, model: Option<&Model>) 
         let mut material = String::new();
         for (source, body) in sources.iter().zip(&bodies) {
             material.push_str(&format!(
-                "[{}] {}\n{}\n\n",
+                "<note number=\"{}\" title=\"{}\">\n{}\n</note>\n\n",
                 source.n,
-                source.title,
-                text::excerpt(body, 4000)
+                source.title.replace('"', "'"),
+                text::excerpt(body, 4000).replace("</", "<\\/")
             ));
         }
-        let system = "You answer questions from the user's own notes. Use only the numbered notes given. \
-            Cite each claim with its note number in square brackets, like [2]. If the notes don't answer \
-            the question, say so plainly in one sentence. Be brief: a few sentences or a short list.";
-        match model.complete(system, &format!("Notes:\n\n{material}Question: {question}")) {
+        let system = crate::skills::system(
+            Some(nb),
+            "answer",
+            preferences,
+            "Answer in plain Markdown, citing notes by their numbers in square brackets.",
+        );
+        match model.complete(
+            &system,
+            &format!("Notes:\n\n{material}Question: {question}"),
+        ) {
             Ok(reply) => {
                 let used: HashSet<usize> = (1..=sources.len())
                     .filter(|n| reply.contains(&format!("[{n}]")))
@@ -339,7 +351,13 @@ mod tests {
         .unwrap();
         fs::write(nb.root.join("Bread.md"), "# Bread\n\nKnead ten minutes.\n").unwrap();
         let index = build_index(&nb);
-        let answer = ask(&nb, &index, "how do I fix autovacuum falling behind?", None);
+        let answer = ask(
+            &nb,
+            &index,
+            "how do I fix autovacuum falling behind?",
+            None,
+            "",
+        );
         assert!(
             answer.text.contains("autovacuum_vacuum_scale_factor"),
             "{}",
@@ -349,7 +367,7 @@ mod tests {
         assert_eq!(answer.sources[0].path, "Postgres.md");
         assert!(!answer.by_model);
 
-        let none = ask(&nb, &index, "quantum chromodynamics", None);
+        let none = ask(&nb, &index, "quantum chromodynamics", None, "");
         assert!(none.sources.is_empty());
     }
 }

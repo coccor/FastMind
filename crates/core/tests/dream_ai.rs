@@ -33,7 +33,7 @@ fn id_of(user: &str, title: &str) -> Option<String> {
 
 /// A model with fixed opinions about this notebook.
 fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
-    let answer = if system.contains("might be duplicates") {
+    let answer = if system.contains("# Merge duplicate notes") {
         match (
             id_of(user, "Conference wifi"),
             id_of(user, "Wifi at the conference"),
@@ -44,14 +44,14 @@ fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
             }]}),
             _ => json!({"groups": []}),
         }
-    } else if system.contains("might all be about one subject") {
+    } else if system.contains("# Gather short notes into a topic") {
         let ids: Vec<String> = ["Starter feeding", "Starter too sour", "Starter rye"]
             .iter()
             .filter_map(|t| id_of(user, t))
             .collect();
         json!({"members": ids, "title": "Sourdough starter", "summary": "How the starter is kept.",
                "body": "## Feeding\n\nDaily, rye helps.\n\n## Sourness\n\nFeed more often.", "reason": "All about the starter."})
-    } else if system.contains("haven't been \nused") || system.contains("haven't been used") {
+    } else if system.contains("# Decide what to archive") {
         let keep_reason = id_of(user, "Old decision");
         let archive = id_of(user, "Old todo");
         let mut decisions = Vec::new();
@@ -63,7 +63,7 @@ fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
                 .push(json!({"id": id, "archive": false, "reason": "A decision worth keeping."}));
         }
         json!({"decisions": decisions})
-    } else if system.contains("points to a note") {
+    } else if system.contains("# Mend broken links") {
         json!({"fixes": [{"id": "l1", "target": "Release checklist", "reason": "A typo of Release checklist."}]})
     } else {
         return Err(Error::msg("unexpected question"));

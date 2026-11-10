@@ -40,6 +40,10 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
                           Choose the AI FastMind runs on, and check it answers
                           (claude-code uses your Claude plan; claude needs
                           ANTHROPIC_API_KEY; local is Ollama, LM Studio…)
+  skills                  The skills the AI works by, and which this notebook edited
+  skills show|edit|reset NAME
+                          Print one, open this notebook's version in your editor
+                          (made from the default), or go back to the default
   setup DIR               Use DIR as the notebook (made if missing)
   demo [DIR]              Make a messy demo notebook and use it
   serve [--port N] [--ui DIR]
@@ -382,6 +386,54 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
                 "FastMind now runs on it (answered in {:.1} s).",
                 check["ms"].as_f64().unwrap_or(0.0) / 1000.0
             );
+        }
+        "skills" | "skill" => {
+            let action = rest.first().cloned().unwrap_or_default();
+            let name = rest.get(1).cloned().unwrap_or_default();
+            match action.as_str() {
+                "" | "list" => {
+                    let skills = app.call("skills_list", json!({}))?;
+                    out(&skills, &|v| {
+                        for skill in v.as_array().into_iter().flatten() {
+                            let edited = if skill["customized"].as_bool() == Some(true) {
+                                "  (edited here)"
+                            } else {
+                                ""
+                            };
+                            println!(
+                                "{:<14} {}{edited}",
+                                s(&skill["name"]),
+                                s(&skill["description"])
+                            );
+                        }
+                        println!(
+                            "
+fastmind skills show NAME | edit NAME | reset NAME"
+                        );
+                    });
+                }
+                "show" => {
+                    let got = app.call("skill_get", json!({"name": name}))?;
+                    println!("{}", s(&got["skill"]["text"]));
+                }
+                "edit" => {
+                    let got = app.call("skill_get", json!({"name": name}))?;
+                    let skill = &got["skill"];
+                    if skill["customized"].as_bool() != Some(true) {
+                        app.call("skill_set", json!({"name": name, "text": skill["text"]}))?;
+                    }
+                    let path = s(&skill["path"]).to_owned();
+                    println!("This notebook's version of {name}: {path}");
+                    let _ = opener::open(&path);
+                }
+                "reset" => {
+                    app.call("skill_reset", json!({"name": name}))?;
+                    println!(
+                        "{name} is back to FastMind's default (your version is kept as .bak)."
+                    );
+                }
+                other => return Err(usage(&format!("unknown skills action \"{other}\""))),
+            }
         }
         "setup" => {
             let folder = rest

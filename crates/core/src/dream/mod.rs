@@ -92,6 +92,8 @@ pub enum Plan {
 pub struct Places {
     pub inbox: String,
     pub ai_folder: String,
+    /// The user's preferences for how notes are written, given to every skill.
+    pub preferences: String,
 }
 
 impl Default for Places {
@@ -99,6 +101,7 @@ impl Default for Places {
         Self {
             inbox: "inbox".into(),
             ai_folder: "AI sessions".into(),
+            preferences: String::new(),
         }
     }
 }
@@ -254,7 +257,7 @@ pub fn run_in(
     ai: Option<ai::Ask>,
     now: DateTime<Local>,
 ) -> Result<Report> {
-    let judge = ai.map(|ask| ai::Judge::new(nb, ask, settings.model_requests));
+    let judge = ai.map(|ask| ai::Judge::new(nb, ask, settings.model_requests, &places.preferences));
     let used_keys: std::sync::Mutex<HashSet<String>> = std::sync::Mutex::new(HashSet::new());
     let fingerprint = |paths: &[&Note]| -> Vec<(String, u64)> {
         paths
@@ -1509,9 +1512,8 @@ fn written_topic(
 const LOOSE_DUPLICATE: f64 = 0.3;
 /// With a model, fragments are clustered this much more loosely than the offline threshold.
 const LOOSE_TOPIC: f64 = 0.7;
-const THREAD_HINT: &str = "These are notes of AI coding sessions in one project. Gather the ones that continued the same piece \
-of work into one thread note: what was being done, how it went session by session, where it ended, and the files and \
-commands that mattered.";
+/// Marks a gathering task as AI sessions: the gather-thread skill judges it.
+const THREAD_HINT: &str = "thread";
 
 pub fn human_bytes(bytes: u64) -> String {
     let b = bytes as f64;

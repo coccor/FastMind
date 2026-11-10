@@ -79,6 +79,10 @@ impl Note {
     /// A record of a day or an event (daily notes, journals, meetings, logs). Records are
     /// history: Dream never retires them for being old.
     pub fn is_record(&self) -> bool {
+        // What the writing step said the note is counts too.
+        if matches!(self.front.text("kind"), Some("meeting" | "journal")) {
+            return true;
+        }
         let kind = self.note_type();
         if matches!(
             kind.as_str(),

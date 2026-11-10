@@ -256,11 +256,13 @@ impl App {
             "ask" => {
                 let question: String = arg(&args, "question")?;
                 let model = self.model();
+                let preferences = self.settings().writing.instructions;
                 json!(self.with_index(&nb, |index| remember::ask(
                     &nb,
                     index,
                     &question,
-                    model.as_ref()
+                    model.as_ref(),
+                    &preferences
                 )))
             }
             "read" => {
@@ -285,6 +287,22 @@ impl App {
                 json!({ "abs_path": nb.path(&path)? })
             }
             "inbox" => json!(self.inbox(&nb)),
+            "skills_list" => json!(crate::skills::list(Some(&nb))),
+            "skill_get" => {
+                let name: String = arg(&args, "name")?;
+                let skill = crate::skills::get(Some(&nb), &name)?;
+                let default = crate::skills::get(None, &name)?.text;
+                json!({ "skill": skill, "default": default })
+            }
+            "skill_set" => {
+                let name: String = arg(&args, "name")?;
+                let text: String = arg(&args, "text")?;
+                json!(crate::skills::set(&nb, &name, &text)?)
+            }
+            "skill_reset" => {
+                let name: String = arg(&args, "name")?;
+                json!(crate::skills::reset(&nb, &name)?)
+            }
             "rewrite_note" => {
                 // Write (or write again) the note from the capture it was made from. Asked for
                 // by the user, so it replaces the note even if edited: History undoes it.
@@ -425,6 +443,7 @@ impl App {
                     model.as_ref(),
                     settings.dream.model_requests,
                     now,
+                    &settings.writing.instructions,
                 )?;
                 self.invalidate();
                 json!(report)
@@ -496,6 +515,7 @@ impl App {
                         model.as_ref(),
                         settings.dream.model_requests,
                         now,
+                        &settings.writing.instructions,
                     )?;
                 }
                 let ask = |system: &str, user: &str, schema: &Value| match &model {
@@ -509,6 +529,7 @@ impl App {
                     &dream::Places {
                         inbox: settings.inbox.clone(),
                         ai_folder: settings.ai.folder.clone(),
+                        preferences: settings.writing.instructions.clone(),
                     },
                     ask,
                     now,

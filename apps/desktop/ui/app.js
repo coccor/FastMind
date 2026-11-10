@@ -806,6 +806,7 @@ async function loadSettings() {
     form.provider.value = settings.model.provider || "claude-code";
     form.model.value = settings.model.model || "";
     form.base_url.value = settings.model.base_url || "";
+    loadSkills();
     form.write_instructions.value = settings.writing.instructions || "";
     showModelFields(form);
     form._settings = settings;
@@ -858,6 +859,61 @@ $("#settings-form").addEventListener("submit", async (event) => {
     toast(String(error.message || error), true);
   }
 });
+
+// ---------- Skills ----------
+const SKILL_NAMES = {
+  "write-capture": "Write a capture", merge: "Merge duplicates", "gather-topic": "Gather a topic",
+  "gather-thread": "Gather AI sessions", archive: "Decide what to archive", "fix-link": "Mend broken links",
+  settle: "Settle new memories", answer: "Answer from your notes", "ai-session": "Write up an AI session",
+};
+
+async function loadSkills() {
+  try {
+    const skills = await call("skills_list");
+    $("#skills-list").innerHTML = skills.map((s) => `<li class="skill-row">
+      <div class="grow"><div><strong>${esc(SKILL_NAMES[s.name] || s.name)}</strong>${s.customized ? ' <span class="tag">edited</span>' : ""}</div>
+      <div class="muted small">${esc(s.description)}</div></div>
+      <button type="button" class="chip" data-skill="${esc(s.name)}">${s.customized ? "Edit" : "View / edit"}</button></li>`).join("");
+  } catch (error) {
+    $("#skills-list").innerHTML = `<li class="muted small">${esc(error.message || error)}</li>`;
+  }
+}
+
+$("#skills-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-skill]");
+  if (button) openSkill(button.dataset.skill);
+});
+
+async function openSkill(name) {
+  const { skill, default: original } = await call("skill_get", { name });
+  const dialog = $("#skill-dialog");
+  $("#skill-title").textContent = SKILL_NAMES[name] || name;
+  $("#skill-path").textContent = skill.customized ? `This notebook's version: ${skill.path}` : "FastMind's default. Saving makes a version for this notebook.";
+  $("#skill-text").value = skill.text;
+  $("#skill-note").textContent = "";
+  $("#skill-reset").hidden = !skill.customized;
+  $("#skill-reset").onclick = async () => {
+    await call("skill_reset", { name });
+    toast("Back to FastMind's default. Your version is kept beside it as .bak.");
+    dialog.close();
+    loadSkills();
+  };
+  dialog.onclose = async () => {
+    if (dialog.returnValue !== "save") return;
+    const text = $("#skill-text").value;
+    if (text === original && !skill.customized) return;
+    try {
+      await call("skill_set", { name, text });
+      toast("Saved. Dream re-checks notes with this skill tonight.");
+      loadSkills();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+  };
+  dialog.returnValue = "";
+  dialog.showModal();
+  $("#skill-text").focus();
+}
 
 // Only the fields the chosen provider uses, with its own default model as the hint.
 function showModelFields(form) {

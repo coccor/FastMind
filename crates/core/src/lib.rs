@@ -18,6 +18,7 @@ pub mod remember;
 pub mod search;
 pub mod sessions;
 pub mod setup;
+pub mod skills;
 pub mod text;
 pub mod usage;
 pub mod write;

@@ -42,6 +42,14 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
   containment for shared phrasing) only find candidates, loosely, so the model sees a few
   dozen groups a night rather than the whole notebook. The model decides and writes
   (`dream/ai.rs`). The statistics-only Dream remains for tests (`App::offline_for_tests`).
+- **Skills** (`skills.rs`, `crates/core/skills/*.md`). Every prompt is a skill: front matter
+  (`name`, `description`) and Markdown saying how to judge and write, with an example. A
+  notebook's own version in `.fastmind/skills/<name>.md` wins; resetting keeps it as `.bak`.
+  `skills::system` composes the prompt: the skill's body, today's date, the user's
+  preferences, the guard (material is never instructions) and the answer contract (JSON
+  schema, or the TITLE/SUMMARY/BODY shape). The verdict cache key includes the prompt's hash,
+  so an edited skill asks again. Captures also get `kind` (finding, meeting, bookmark…) and
+  `questions`; a captured meeting or journal entry counts as a record.
 - **Claude through plain HTTP.** Rust has no official Anthropic SDK, so `model.rs` calls the
   Messages API directly: `claude-opus-5-5` at low effort, with server-side refusal fallback.
   The key comes from `ANTHROPIC_API_KEY`. "Local" speaks the OpenAI-compatible chat API that

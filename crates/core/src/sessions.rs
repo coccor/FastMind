@@ -638,7 +638,14 @@ pub struct Distilled {
 }
 
 /// With a model: the session as a finding someone can use later.
-pub fn distill(model: &Model, session: &Session) -> Result<Distilled> {
+/// The answer shape the ai-session skill's reply is read in.
+pub const SESSION_CONTRACT: &str = "Reply in this exact shape, and nothing else:\n\
+TITLE: the title\n\
+SUMMARY: the summary\n\
+BODY:\n\
+the body, in Markdown";
+
+pub fn distill(model: &Model, session: &Session, system: &str) -> Result<Distilled> {
     let mut material = String::new();
     for (i, prompt) in session.prompts.iter().enumerate().take(20) {
         material.push_str(&format!("USER {}: {}\n\n", i + 1, clip(prompt, 2000)));
@@ -659,15 +666,11 @@ pub fn distill(model: &Model, session: &Session) -> Result<Distilled> {
     }
     let material = redact(&material);
     let reply = model.complete(
-        "You turn a coding session between a developer and an AI agent into a note for the developer's \
-         notebook, read months later by someone without the conversation. Reply in this exact shape:\n\
-         TITLE: the finding stated as a claim, under 12 words (not the topic)\n\
-         SUMMARY: one sentence that answers the question on its own\n\
-         BODY:\n\
-         Markdown with only the sections that apply: '## Problem', '## What was found', '## Decision', \
-         '## What worked' (commands, in fenced blocks), '## Watch out'. Be brief and concrete. Never include \
-         secrets, tokens or passwords.",
-        &material,
+        system,
+        &format!(
+            "<transcript>\n{}\n</transcript>",
+            material.replace("</", "<\\/")
+        ),
     )?;
     let title = model::field(&reply, "title")
         .ok_or_else(|| crate::Error::msg("the model gave no title"))?;
@@ -731,7 +734,9 @@ pub fn import(
     model: Option<&Model>,
     model_budget: usize,
     now: DateTime<Local>,
+    preferences: &str,
 ) -> Result<ImportReport> {
+    let system = crate::skills::system(Some(nb), "ai-session", preferences, SESSION_CONTRACT);
     let mut state: State = fs::read(state_file(nb))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -791,7 +796,7 @@ pub fn import(
         let distilled = match (model, budget > 0) {
             (Some(model), true) => {
                 budget -= 1;
-                match distill(model, &session) {
+                match distill(model, &session, &system) {
                     Ok(d) => Some(d),
                     Err(error) => {
                         report.notes.push(format!("{}: {error}", session.title));

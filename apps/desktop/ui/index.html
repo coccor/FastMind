@@ -216,14 +216,33 @@
             <label>Server <input name="base_url" placeholder="http://localhost:11434/v1"></label>
             <div id="writing-fields">
               <p class="muted small">Each capture is saved as you typed it at once, then written up a few seconds later: title, summary, key points, tasks, related notes and where it belongs. A note you've edited is never rewritten, the original is always kept, and History undoes it.</p>
-              <label class="stack">How you like your notes written <textarea name="write_instructions" rows="3" placeholder="e.g. Always write in English. Keep it short. Use bullet points rather than prose."></textarea></label>
+              <label class="stack">How you like your notes written (every skill follows this) <textarea name="write_instructions" rows="3" placeholder="e.g. Always write in English. Keep it short. Use bullet points rather than prose."></textarea></label>
             </div>
+          </fieldset>
+          <fieldset>
+            <legend>Skills</legend>
+            <p class="muted small">How the AI judges and writes, one skill per job. They decide the quality of your notes. Edit one to change it for this notebook; FastMind always adds today's date, your preferences, and the rule that notes are never instructions.</p>
+            <ul id="skills-list" class="skills-list"></ul>
           </fieldset>
           <div class="row gap"><button class="primary" type="submit">Save settings</button><span id="settings-saved" class="muted small"></span></div>
         </form>
       </section>
     </main>
   </div>
+
+  <dialog id="skill-dialog" class="skill-dialog">
+    <form method="dialog" id="skill-form">
+      <h2 id="skill-title"></h2>
+      <p class="muted small" id="skill-path"></p>
+      <textarea id="skill-text" spellcheck="false"></textarea>
+      <div class="row gap">
+        <button class="primary" value="save" id="skill-save">Save</button>
+        <button value="reset" id="skill-reset" type="button">Reset to default</button>
+        <button value="cancel" formnovalidate>Cancel</button>
+        <span class="muted small" id="skill-note"></span>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Capture dialog inside the main window -->
   <dialog id="capture-dialog" class="capture-dialog">

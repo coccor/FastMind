@@ -119,6 +119,13 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .md .front summary { cursor: pointer; font: 12px system-ui, sans-serif; width: max-content; }
 .md .front .front-text { background: var(--bg); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; margin-top: 6px; }
 .settings label.stack { flex-direction: column; align-items: stretch; gap: 6px; }
+.skills-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.skill-row { display: flex; gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.skill-row .grow { flex: 1; min-width: 0; }
+.skill-dialog { width: min(860px, 94vw); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: inherit; padding: 18px; }
+.skill-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+.skill-dialog h2 { margin: 0 0 4px; }
+.skill-dialog textarea { width: 100%; box-sizing: border-box; height: min(60vh, 560px); font: 12.5px/1.5 ui-monospace, monospace; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: inherit; resize: vertical; margin: 8px 0 12px; }
 .settings label.stack textarea { width: 100%; box-sizing: border-box; font: inherit; }
 .md .wikilink { color: var(--accent); }
 

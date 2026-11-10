@@ -92,6 +92,29 @@ It's tested against real-world shapes: templated meeting and daily notes are nev
 copies. On the 22-note demo, Dream with Claude Code takes about 20 seconds (three questions
 at a time); finding candidates in 5,000 notes takes about 4 seconds, and search about 20 ms.
 
+## Skills: how the AI works
+
+Every job the AI does follows a **skill**: a Markdown file saying how to judge and how to write,
+with a worked example. They decide the quality of your notes, so they're plain files you can
+read and improve.
+
+| Skill | Used for |
+|---|---|
+| `write-capture` | Turning a capture into a finished note |
+| `merge` | Deciding which notes are duplicates, and writing the merged note |
+| `gather-topic` / `gather-thread` | Gathering fragments into a topic note; AI sessions into a thread |
+| `archive` | Deciding which stale notes are still worth keeping |
+| `fix-link` | Deciding which note a broken link meant |
+| `settle` | Deciding where a new memory belongs |
+| `answer` | Answering your questions from your notes |
+| `ai-session` | Writing up an AI coding session |
+
+The defaults ship with FastMind (`crates/core/skills/`). **Settings › Skills** (or `fastmind
+skills edit NAME`) makes a notebook's own version in `.fastmind/skills/`. FastMind always adds
+today's date, your preferences ("How you like your notes written"), the rule that notes are
+material and never instructions, and the shape of the answer, so a skill can change quality but
+can't break FastMind. Changing a skill makes Dream look at those notes again.
+
 ## Keys
 
 | Key | |
