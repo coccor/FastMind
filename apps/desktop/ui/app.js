@@ -150,11 +150,92 @@ async function refreshStatus() {
     const status = await call("status");
     $("#badge-inbox").textContent = "";
     $("#badge-dream").textContent = status.dream && status.dream.pending ? status.dream.pending : "";
-    $("#notebook-line").textContent = `${status.notes} notes · ${status.notebook}`;
+    const name = String(status.notebook).split(/[\\/]/).filter(Boolean).pop() || String(status.notebook);
+    $("#nb-name").textContent = name;
+    $("#nb-count").textContent = `${status.notes} notes`;
+    $("#notebook-switch").title = `${status.notebook}\nSwitch notebook`;
   } catch (error) {
-    $("#notebook-line").textContent = String(error.message || error);
+    $("#nb-name").textContent = "No notebook";
+    $("#nb-count").textContent = String(error.message || error);
   }
 }
+
+// ---------- Switching notebooks ----------
+const notebookMenu = $("#notebook-menu");
+
+function closeNotebookMenu() {
+  notebookMenu.hidden = true;
+  $("#notebook-switch").setAttribute("aria-expanded", "false");
+}
+
+async function openNotebookMenu() {
+  let list;
+  try { list = await call("notebooks"); } catch (error) { toast(String(error.message || error), true); return; }
+  const item = (n, extra = "") => `<button type="button" role="menuitem" class="nb-item" data-path="${esc(n.path)}"${n.exists === false ? " disabled" : ""}>
+      <span class="nb-item-name">${esc(n.name)}${extra}</span><span class="nb-item-path">${esc(n.path)}</span></button>`;
+  const kind = { obsidian: "Obsidian vault", fastcapture: "FastCapture notebook", fastmind: "FastMind notebook" };
+  notebookMenu.innerHTML = `
+    ${list.current ? `<div class="nb-section">Using now</div><div class="nb-item current"><span class="nb-item-name">✓ ${esc(list.current.name)}</span><span class="nb-item-path">${esc(list.current.path)}</span></div>` : ""}
+    ${list.recent.length ? `<div class="nb-section">Recent</div>${list.recent.map((n) => `<div class="nb-row">${item(n, n.exists ? "" : " (missing)")}<button type="button" class="nb-forget" data-forget="${esc(n.path)}" title="Remove from this list" aria-label="Remove ${esc(n.name)} from this list">×</button></div>`).join("")}` : ""}
+    ${list.found.length ? `<div class="nb-section">Found on this computer</div>${list.found.map((n) => item(n, ` <span class="muted small">· ${esc(kind[n.kind] || "notes")}, ${n.notes} notes</span>`)).join("")}` : ""}
+    <div class="nb-section">Another folder</div>
+    ${tauri ? `<div class="nb-actions"><button type="button" data-nb="open">Open a folder…</button><button type="button" data-nb="new">New notebook…</button></div>` : ""}
+    <form class="nb-path"><input placeholder="Folder path, e.g. C:\\Notes\\Work" aria-label="Folder path"><button>Open</button></form>`;
+  notebookMenu.hidden = false;
+  $("#notebook-switch").setAttribute("aria-expanded", "true");
+  notebookMenu.querySelector(".nb-item:not(.current), input")?.focus();
+}
+
+async function switchNotebook(path, create = false) {
+  try {
+    await call("notebook_switch", { path, create });
+    closeNotebookMenu();
+    $("#reader").hidden = true;
+    selected = null;
+    await refreshStatus();
+    show(current);
+    toast(`Now using ${path.split(/[\\/]/).filter(Boolean).pop()}`);
+  } catch (error) {
+    const message = String(error.message || error);
+    if (!create && message.endsWith("doesn't exist")) {
+      // Typed a folder that isn't there: offer to make it, in the menu itself.
+      const form = notebookMenu.querySelector(".nb-path");
+      form.querySelector("input").value = path;
+      form.insertAdjacentHTML("afterend", `<div class="nb-create small">${esc(message)}. <button type="button" data-create="${esc(path)}">Create a new notebook there</button></div>`);
+      return;
+    }
+    toast(message, true);
+  }
+}
+
+$("#notebook-switch").addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (notebookMenu.hidden) openNotebookMenu(); else closeNotebookMenu();
+});
+notebookMenu.addEventListener("click", async (event) => {
+  event.stopPropagation();
+  const forget = event.target.closest("[data-forget]");
+  if (forget) { await call("notebook_forget", { path: forget.dataset.forget }); openNotebookMenu(); return; }
+  const create = event.target.closest("[data-create]");
+  if (create) { switchNotebook(create.dataset.create, true); return; }
+  const action = event.target.closest("[data-nb]");
+  if (action) {
+    const folder = await tauri.core.invoke("pick_folder").catch(() => null);
+    if (folder) switchNotebook(folder, action.dataset.nb === "new");
+    return;
+  }
+  const item = event.target.closest(".nb-item[data-path]");
+  if (item) switchNotebook(item.dataset.path);
+});
+notebookMenu.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const path = event.target.querySelector("input").value.trim();
+  if (path) switchNotebook(path);
+});
+document.addEventListener("click", () => { if (!notebookMenu.hidden) closeNotebookMenu(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !notebookMenu.hidden) { closeNotebookMenu(); $("#notebook-switch").focus(); }
+});
 
 // ---------- Home ----------
 async function loadHome() {

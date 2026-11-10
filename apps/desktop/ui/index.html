@@ -63,7 +63,12 @@
       <button class="nav" data-view="settings"><span class="ico">⚙</span>Settings</button>
       <div class="sidebar-foot">
         <button id="capture-open" class="primary wide">+ Capture</button>
-        <div class="muted small" id="notebook-line"></div>
+        <div class="notebook-menu-wrap">
+          <button type="button" id="notebook-switch" class="notebook-switch" aria-haspopup="menu" aria-expanded="false" title="Switch notebook">
+            <span class="nb-text"><span id="nb-name">Notebook</span><span class="muted small" id="nb-count"></span></span><span class="muted nb-caret">▾</span>
+          </button>
+          <div id="notebook-menu" class="notebook-menu" role="menu" hidden></div>
+        </div>
       </div>
     </nav>
 

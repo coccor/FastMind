@@ -287,3 +287,53 @@ fn archived_notes_come_back_even_from_a_pack() {
             .contains("Hire two engineers")
     );
 }
+
+#[test]
+fn switching_notebooks_remembers_them_and_uses_each_ones_capture_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("Work");
+    let fastcapture = dir.path().join("Old notes");
+    fs::create_dir_all(fastcapture.join("inbox")).unwrap();
+    fs::write(fastcapture.join("inbox/Kept.md"), "# Kept\n").unwrap();
+    let app = app_for(&first);
+    fs::create_dir_all(&first).unwrap();
+
+    app.call("notebook_switch", json!({ "path": fastcapture }))
+        .unwrap();
+    assert_eq!(
+        app.settings().inbox,
+        "inbox",
+        "a FastCapture notebook keeps its inbox"
+    );
+    let saved = app.call("capture", json!({ "text": "a thought" })).unwrap();
+    assert!(saved["path"].as_str().unwrap().starts_with("inbox/"));
+
+    let list = app.call("notebooks", json!({})).unwrap();
+    assert_eq!(list["current"]["name"], "Old notes");
+    assert_eq!(
+        list["recent"][0]["name"], "Work",
+        "the one before is a click away"
+    );
+
+    let missing = dir.path().join("New one");
+    let refused = app.call("notebook_switch", json!({ "path": missing }));
+    assert!(refused.unwrap_err().0.contains("doesn't exist"));
+    assert!(!missing.exists(), "nothing is made unless asked");
+    app.call(
+        "notebook_switch",
+        json!({ "path": missing, "create": true }),
+    )
+    .unwrap();
+    assert_eq!(
+        app.settings().inbox,
+        "Fresh memories",
+        "a new notebook gets fresh memories"
+    );
+    let recent: Vec<String> = app.call("notebooks", json!({})).unwrap()["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(recent, ["Old notes", "Work"]);
+}

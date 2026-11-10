@@ -27,6 +27,8 @@ pub struct Settings {
     pub ai: crate::sessions::AiSettings,
     /// The second step of a capture: a model writes the note.
     pub writing: crate::write::WritingSettings,
+    /// Notebooks used before, most recent first, for switching between them.
+    pub recent_notebooks: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -83,6 +85,7 @@ impl Default for Settings {
             fetch_link_titles: true,
             ai: crate::sessions::AiSettings::default(),
             writing: crate::write::WritingSettings::default(),
+            recent_notebooks: Vec::new(),
         }
     }
 }
@@ -126,6 +129,27 @@ pub fn config_file() -> PathBuf {
     directories::ProjectDirs::from("dev", "coccor", "FastMind")
         .map(|dirs| dirs.config_dir().join("settings.json"))
         .unwrap_or_else(|| PathBuf::from("fastmind-settings.json"))
+}
+
+/// Where a notebook keeps fresh captures: what FastPad's `capture_folder` says, else a folder
+/// it already uses (`Fresh memories`, or FastCapture's `inbox`), else `Fresh memories`.
+pub fn capture_folder_for(notebook: &std::path::Path) -> String {
+    let ini =
+        std::fs::read_to_string(notebook.join(".fastpad").join("notebook.ini")).unwrap_or_default();
+    if let Some(folder) = ini.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "capture_folder").then(|| value.trim().trim_matches(['/', '\\']).to_owned())
+    }) && !folder.is_empty()
+        && !folder.contains("..")
+    {
+        return folder;
+    }
+    for folder in ["Fresh memories", "inbox"] {
+        if notebook.join(folder).is_dir() {
+            return folder.to_owned();
+        }
+    }
+    "Fresh memories".to_owned()
 }
 
 /// The folder suggested for a first notebook: `~/FastMind`.

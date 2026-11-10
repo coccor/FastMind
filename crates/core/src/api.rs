@@ -194,6 +194,9 @@ impl App {
                 | "setup"
                 | "agent_setup"
                 | "model_check"
+                | "notebooks"
+                | "notebook_switch"
+                | "notebook_forget"
         ) {
             return self.call_without_notebook(name, args);
         }
@@ -641,6 +644,13 @@ impl App {
                 });
                 let report = demo::create(&path)?;
                 let mut settings = self.settings();
+                if let Some(old) = settings.notebook.take()
+                    && old != path
+                {
+                    settings.recent_notebooks.retain(|p| p != &old);
+                    settings.recent_notebooks.insert(0, old);
+                }
+                settings.inbox = crate::config::capture_folder_for(&path);
                 settings.notebook = Some(path.clone());
                 self.replace_settings(settings)?;
                 json!({ "path": path, "notes": report })
@@ -688,6 +698,75 @@ impl App {
                     "hotkeys": settings.hotkeys,
                 })
             }
+            "notebooks" => {
+                let settings = self.settings();
+                let describe = |path: &std::path::Path| {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
+                    json!({ "path": path, "name": name, "exists": path.is_dir() })
+                };
+                let current = settings.notebook.clone();
+                let recent: Vec<Value> = settings
+                    .recent_notebooks
+                    .iter()
+                    .filter(|p| Some(*p) != current.as_ref())
+                    .map(|p| describe(p))
+                    .collect();
+                let known: Vec<PathBuf> = current
+                    .iter()
+                    .chain(settings.recent_notebooks.iter())
+                    .map(|p| p.to_string_lossy().to_lowercase().into())
+                    .collect();
+                let found: Vec<Value> = crate::setup::candidates()
+                    .into_iter()
+                    .filter(|c| c.kind != "new" && c.notes > 0)
+                    .filter(|c| {
+                        !known.contains(&PathBuf::from(c.path.to_string_lossy().to_lowercase()))
+                    })
+                    .map(|c| {
+                        let mut v = describe(&c.path);
+                        v["kind"] = json!(c.kind);
+                        v["notes"] = json!(c.notes);
+                        v
+                    })
+                    .collect();
+                json!({ "current": current.as_deref().map(describe), "recent": recent, "found": found })
+            }
+            "notebook_switch" => {
+                let path: PathBuf = arg(&args, "path")?;
+                let create: bool = arg(&args, "create").unwrap_or(false);
+                if path.as_os_str().is_empty() {
+                    return Err(Error::msg("choose a folder"));
+                }
+                if !path.is_dir() {
+                    if !create {
+                        return Err(Error::msg(format!("{} doesn't exist", path.display())));
+                    }
+                    std::fs::create_dir_all(&path)?;
+                }
+                let mut settings = self.settings();
+                if let Some(old) = settings.notebook.take()
+                    && old != path
+                {
+                    settings.recent_notebooks.retain(|p| p != &old);
+                    settings.recent_notebooks.insert(0, old);
+                }
+                settings.recent_notebooks.retain(|p| p != &path);
+                settings.recent_notebooks.truncate(8);
+                settings.inbox = crate::config::capture_folder_for(&path);
+                settings.notebook = Some(path.clone());
+                self.replace_settings(settings)?;
+                json!({ "path": path })
+            }
+            "notebook_forget" => {
+                let path: PathBuf = arg(&args, "path")?;
+                let mut settings = self.settings();
+                settings.recent_notebooks.retain(|p| p != &path);
+                self.replace_settings(settings)?;
+                json!({ "ok": true })
+            }
             "model_check" => {
                 // A tiny request, so setup can say the provider works before it's saved.
                 let settings: crate::model::ModelSettings = arg(&args, "model")?;
@@ -704,6 +783,7 @@ impl App {
                     arg(&args, "model").unwrap_or(None);
                 std::fs::create_dir_all(&notebook)?;
                 let mut settings = self.settings();
+                settings.inbox = crate::config::capture_folder_for(&notebook);
                 settings.notebook = Some(notebook);
                 settings.ai.enabled = ai;
                 if let Some(model) = model {
