@@ -187,9 +187,13 @@ the `fastmind` command first and puts it beside the app, so agents and the sessi
 start it:
 
 ```sh
-cd apps/desktop && cargo tauri build
+cd apps/desktop
+cargo tauri build --config bundle/windows.json   # or bundle/macos.json, bundle/linux.json
 # Windows: target/release/bundle/nsis/FastMind_<version>_x64-setup.exe and bundle/msi/*.msi
 ```
+
+The `bundle/` files add the `fastmind` command to the installer. They're passed only to
+`cargo tauri build`, because Tauri checks that bundled files exist on every build.
 
 | Folder | |
 |---|---|
