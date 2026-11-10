@@ -205,12 +205,21 @@ legend { font-weight: 650; padding: 0 6px; }
 .capture-only { height: 100vh; padding: 0; }
 /* The window has no frame: the box is the window, edge to edge. */
 .capture-only .capture-box { height: 100%; box-shadow: none; border: none; border-radius: 0; box-sizing: border-box; padding: 10px 12px 12px; }
-.capture-only .capture-title { cursor: grab; user-select: none; -webkit-user-select: none; padding: 2px 0 4px; }
+.capture-only .capture-title { position: relative; cursor: grab; user-select: none; -webkit-user-select: none; padding: 2px 0 4px; }
 .capture-close { margin-left: auto; border: none; background: transparent; color: var(--muted); padding: 2px 8px; border-radius: 6px; cursor: pointer; }
 .capture-close:hover { background: var(--bg); color: var(--text); }
 .capture-box .capture-close { display: none; }
 .capture-only .capture-close { display: inline-block; }
 .capture-only textarea { flex: 1; resize: none; }
+/* Which notebook the capture goes to, changeable right in the capture window. */
+.capture-nb-wrap { display: none; min-width: 0; }
+.capture-only .capture-nb-wrap { display: inline-flex; }
+.capture-nb { display: inline-flex; align-items: center; gap: 2px; border: none; background: transparent; font-weight: 650; color: var(--text); padding: 2px 6px; border-radius: 6px; cursor: pointer; max-width: 220px; }
+.capture-nb:hover, .capture-nb[aria-expanded="true"] { background: var(--bg); }
+#capture-nb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.capture-nb svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
+/* More specific than the narrow-window rule that pins the sidebar's menu to the rail. */
+.capture-only .capture-nb-menu { position: absolute; top: calc(100% + 4px); bottom: auto; left: 0; right: 0; width: auto; max-height: calc(100vh - 56px); font-weight: 400; cursor: default; }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow); max-width: 80vw; z-index: 10; }
 .toast.error { background: var(--bad); color: #fff; }

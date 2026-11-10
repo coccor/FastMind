@@ -11,7 +11,11 @@
   <!-- The small capture window (opened by the capture hotkey) uses only this part. -->
   <section id="capture-only" class="capture-only" hidden>
     <form id="capture-form-mini" class="capture-box">
-      <div class="capture-title" data-tauri-drag-region><span class="dot" data-tauri-drag-region></span><span data-tauri-drag-region>Capture <span class="muted" data-tauri-drag-region>→ Fresh memories</span></span>
+      <div class="capture-title" data-tauri-drag-region><span class="dot" data-tauri-drag-region></span><span data-tauri-drag-region>Capture <span class="muted" data-tauri-drag-region>→ Fresh memories in</span></span>
+        <span class="capture-nb-wrap">
+          <button type="button" id="capture-nb" class="capture-nb" aria-haspopup="menu" aria-expanded="false" title="Change notebook"><span id="capture-nb-name">Notebook</span><i data-icon="chevron-down"></i></button>
+          <div id="capture-nb-menu" class="notebook-menu capture-nb-menu" role="menu" hidden></div>
+        </span>
         <button type="button" class="capture-close" id="capture-close-mini" title="Close (Esc keeps a draft)" aria-label="Close"><i data-icon="x"></i></button></div>
       <textarea id="capture-text-mini" placeholder="What do you want to keep? A thought, a link, a fix… #tags work. Paste or drop screenshots and files." autofocus></textarea>
       <div class="attachments" id="capture-files-mini" hidden></div>

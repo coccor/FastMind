@@ -1367,7 +1367,84 @@ function startCaptureOnly() {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $("#capture-form-mini").requestSubmit(); }
     if (event.key === "Escape") { event.preventDefault(); close(); }
   });
-  if (tauri) tauri.event.listen("capture-shown", () => setTimeout(() => area.focus(), 30));
+  const notebooks = captureNotebookPicker(area);
+  if (tauri) {
+    tauri.event.listen("capture-shown", () => { notebooks.close(); notebooks.refresh(); setTimeout(() => area.focus(), 30); });
+    // The main window switched notebooks: show where the next capture goes.
+    tauri.event.listen("changed", () => notebooks.refresh());
+  }
+}
+
+// The capture window's notebook: its name in the title, and a menu to change it there.
+// Changing it switches FastMind's notebook, the same as the switcher in the main window.
+function captureNotebookPicker(area) {
+  const button = $("#capture-nb");
+  const menu = $("#capture-nb-menu");
+  const refresh = async () => {
+    try {
+      const status = await call("status");
+      $("#capture-nb-name").textContent = String(status.notebook).split(/[\\/]/).filter(Boolean).pop() || String(status.notebook);
+      button.title = `Saving to ${status.notebook}\nChange notebook`;
+    } catch {
+      $("#capture-nb-name").textContent = "No notebook";
+      button.title = "Choose a notebook";
+    }
+  };
+  const close = () => { menu.hidden = true; button.setAttribute("aria-expanded", "false"); };
+  const open = async () => {
+    let list;
+    try { list = await call("notebooks"); } catch (error) { toast(String(error.message || error), true); return; }
+    const item = (n, current = false) => `<button type="button" role="menuitem" class="nb-item${current ? " current" : ""}" data-path="${esc(n.path)}"${n.exists === false ? " disabled" : ""}>
+        <span class="nb-item-name">${current ? icon("check") + " " : ""}${esc(n.name)}${n.exists === false ? " (missing)" : ""}</span><span class="nb-item-path">${esc(n.path)}</span></button>`;
+    menu.innerHTML = `
+      ${list.current ? item(list.current, true) : ""}
+      ${list.recent.map((n) => item(n)).join("")}
+      ${list.found.length ? `<div class="nb-section">Found on this computer</div>${list.found.map((n) => item(n)).join("")}` : ""}
+      ${tauri ? `<div class="nb-actions"><button type="button" data-nb="open">Open a folder…</button></div>` : ""}`;
+    menu.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    (menu.querySelector(".nb-item:not(.current):not(:disabled)") || menu.querySelector(".nb-item"))?.focus();
+  };
+  const choose = async (path) => {
+    close();
+    try {
+      await call("notebook_switch", { path });
+      await refresh();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+    area.focus();
+  };
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (menu.hidden) open(); else { close(); area.focus(); }
+  });
+  menu.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (event.target.closest("[data-nb]")) {
+      close();
+      const folder = await tauri.core.invoke("pick_folder").catch(() => null);
+      if (folder) choose(folder); else area.focus();
+      return;
+    }
+    const pick = event.target.closest(".nb-item[data-path]");
+    if (!pick) return;
+    if (pick.classList.contains("current")) { close(); area.focus(); return; }
+    choose(pick.dataset.path);
+  });
+  menu.addEventListener("keydown", (event) => {
+    // Esc closes only the menu, not the window; arrows move through the notebooks.
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); button.focus(); return; }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const items = [...menu.querySelectorAll("button:not(:disabled)")];
+      const at = items.indexOf(document.activeElement);
+      items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+    }
+  });
+  document.addEventListener("click", () => { if (!menu.hidden) close(); });
+  refresh();
+  return { refresh, close };
 }
 
 // First run: choose where the notes live before anything touches the disk.
