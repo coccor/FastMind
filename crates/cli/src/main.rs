@@ -17,13 +17,13 @@ const HELP: &str = "FastMind: capture, remember, dream. Plain Markdown, any OS.
 Usage: fastmind [--notebook DIR] [--json] <command> [args]
 
   capture TEXT [--url URL] [--tag TAG]... [--attach FILE]... [--folder DIR] [--raw]
-                          Save a note in the inbox (TEXT \"-\" reads stdin). With a
+                          Save a note as a fresh memory (TEXT \"-\" reads stdin). With a
                           model chosen, it writes the note before returning; --raw
                           saves it as typed
   write NOTE              Write a captured note again from what was captured
   search QUERY            Find notes (#tag filters by tag)
   ask QUESTION            Answer from your notes, with sources
-  inbox                   Notes waiting in the inbox
+  inbox                   Fresh memories, not settled yet
   status                  The notebook at a glance
 
   dream                   Look over the notebook and propose how to compress it
@@ -276,7 +276,7 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
             let notes = app.call("inbox", json!({}))?;
             out(&notes, &|v| {
                 let notes = v.as_array().cloned().unwrap_or_default();
-                println!("{} in the inbox", notes.len());
+                println!("{} fresh memories", notes.len());
                 for note in notes {
                     println!("- {} ({})", s(&note["title"]), s(&note["path"]));
                 }
@@ -287,7 +287,7 @@ fn run(app: &App, args: Args) -> Result<(), Failure> {
             out(&status, &|v| {
                 println!("Notebook  {}", s(&v["notebook"]));
                 println!(
-                    "Notes     {} ({} in the inbox, {} archived)",
+                    "Notes     {} ({} fresh, {} archived)",
                     v["notes"], v["inbox"], v["archived"]
                 );
                 println!("Model     {}", s(&v["model"]));
