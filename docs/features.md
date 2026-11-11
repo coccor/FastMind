@@ -148,6 +148,14 @@ and the hook to `~/.claude/settings.json` (keeping a `.fastmind-backup` copy). C
 the MCP server to `~/.codex/config.toml`; Settings shows the lines. Claude Desktop and other MCP
 clients run `fastmind mcp`.
 
+**A notebook per project.** By default every project's notes go to your notebook. To give a
+project its own, run `fastmind project set ~/planning/my-service/notes` inside it (or
+`fastmind project set NOTEBOOK DIR`). Agents working anywhere in that folder then search and save
+there, and its sessions are written up there; so are `fastmind` commands run inside it. The
+innermost project wins, so `~/work` and `~/work/api` can have different notebooks.
+`fastmind project` lists them and says which applies where you are; `fastmind project unset`
+goes back to the usual notebook. The map is `project_notebooks` in `settings.json`.
+
 ## Home
 
 Every morning: what Dream did and proposes, fresh memories, recent notes, and two older notes

@@ -279,20 +279,27 @@ pub fn session_end() -> Result<(), String> {
     let Some(transcript) = event["transcript_path"].as_str().filter(|p| !p.is_empty()) else {
         return Ok(());
     };
-    let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-    command
-        .args(["import-session", transcript])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    // Run in the session's folder, so a project with a notebook of its own gets the note.
+    let cwd = event["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir());
+    let import = || -> Result<Command, String> {
+        let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        command
+            .args(["import-session", transcript])
+            .stdin(Stdio::null());
+        if let Some(dir) = &cwd {
+            command.current_dir(dir);
+        }
+        Ok(command)
+    };
+    let mut command = import()?;
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     detach(&mut command);
     if command.spawn().is_err() {
         // Not allowed to leave Claude Code's job: do it here instead.
-        let mut inline = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-        inline
-            .args(["import-session", transcript])
-            .stdin(Stdio::null());
-        let _ = inline.status();
+        let _ = import()?.status();
     }
     Ok(())
 }
