@@ -58,8 +58,9 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
   mcp                     Serve the notebook to coding agents (MCP over stdio)
   agent install [--no-hook] | uninstall | status
                           Connect FastMind to Claude Code: the MCP server, the
-                          /fastmind skill and a SessionEnd hook that writes up
-                          each session when it ends
+                          /fastmind skill, a SessionEnd hook that writes up
+                          each session when it ends and a SessionStart hook
+                          that tells the next one what the last ones did
   import-session FILE     Write up one Claude Code or Codex transcript now
   settings                Show where settings live and what they are
 
@@ -586,7 +587,11 @@ fastmind skills show NAME | edit NAME | reset NAME"
             Some("session-end") => {
                 let _ = agent::session_end();
             }
-            _ => return Err(usage("hook session-end")),
+            // And when one starts: at worst it adds nothing.
+            Some("session-start") => {
+                let _ = agent::session_start();
+            }
+            _ => return Err(usage("hook session-end | session-start")),
         },
         "import-session" => {
             let path = rest.join(" ");

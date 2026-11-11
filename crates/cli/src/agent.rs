@@ -1,6 +1,7 @@
 //! FastMind inside Claude Code: the MCP server (search, read, ask, save, and the `note` prompt,
 //! which Claude Code shows as `/mcp__fastmind__note`), a `/fastmind` skill that does the same
-//! under a shorter name, and a SessionEnd hook that writes up each session as soon as it ends.
+//! under a shorter name, a SessionEnd hook that writes up each session as soon as it ends, and a
+//! SessionStart hook that tells a new session what the earlier ones in its project did.
 
 use serde_json::{Value, json};
 use std::io::Read;
@@ -81,20 +82,43 @@ fn this_exe() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The hook's command line.
-pub fn hook_command(exe: &str) -> String {
-    format!("\"{exe}\" hook session-end")
+/// FastMind's hooks: the Claude Code event, the `fastmind hook` argument, which starts it
+/// fires on (none: all), and how long Claude Code waits for it.
+const HOOKS: [(&str, &str, Option<&str>, u32); 2] = [
+    ("SessionEnd", "session-end", None, 30),
+    // Not on resume (the session already has it) or after a compaction (its summary keeps it).
+    ("SessionStart", "session-start", Some("startup|clear"), 10),
+];
+
+/// A hook's command line.
+pub fn hook_command(exe: &str, arg: &str) -> String {
+    format!("\"{exe}\" hook {arg}")
 }
 
-fn is_ours(hook: &Value) -> bool {
-    hook["command"]
-        .as_str()
-        .is_some_and(|c| c.contains("hook session-end") && c.to_lowercase().contains("fastmind"))
+fn is_ours(hook: &Value, arg: &str) -> bool {
+    hook["command"].as_str().is_some_and(|c| {
+        c.contains(&format!("hook {arg}")) && c.to_lowercase().contains("fastmind")
+    })
 }
 
-/// `settings` with FastMind's SessionEnd hook added (any earlier copy of it replaced), or
-/// removed when `add` is false.
-pub fn with_hook(mut settings: Value, exe: &str, add: bool) -> Value {
+/// `settings` with FastMind's hooks added (any earlier copies replaced), or removed when `add`
+/// is false.
+pub fn with_hooks(mut settings: Value, exe: &str, add: bool) -> Value {
+    for (event, arg, matcher, timeout) in HOOKS {
+        settings = with_hook(settings, event, arg, matcher, timeout, exe, add);
+    }
+    settings
+}
+
+fn with_hook(
+    mut settings: Value,
+    event: &str,
+    arg: &str,
+    matcher: Option<&str>,
+    timeout: u32,
+    exe: &str,
+    add: bool,
+) -> Value {
     if !settings.is_object() {
         settings = json!({});
     }
@@ -109,7 +133,7 @@ pub fn with_hook(mut settings: Value, exe: &str, add: bool) -> Value {
     let list = hooks
         .as_object_mut()
         .expect("an object")
-        .entry("SessionEnd")
+        .entry(event)
         .or_insert_with(|| json!([]));
     if !list.is_array() {
         *list = json!([]);
@@ -118,14 +142,30 @@ pub fn with_hook(mut settings: Value, exe: &str, add: bool) -> Value {
     // Drop our hook from every matcher group, and groups it leaves empty.
     for group in entries.iter_mut() {
         if let Some(inner) = group["hooks"].as_array_mut() {
-            inner.retain(|h| !is_ours(h));
+            inner.retain(|h| !is_ours(h, arg));
         }
     }
     entries.retain(|group| group["hooks"].as_array().is_none_or(|h| !h.is_empty()));
     if add {
-        entries.push(json!({
-            "hooks": [{ "type": "command", "command": hook_command(exe), "timeout": 30 }]
-        }));
+        let mut group = json!({
+            "hooks": [{ "type": "command", "command": hook_command(exe, arg), "timeout": timeout }]
+        });
+        if let Some(matcher) = matcher {
+            group["matcher"] = json!(matcher);
+        }
+        entries.push(group);
+    }
+    // An event left with no hooks at all goes, so removing ours gives the settings back.
+    let hooks = settings["hooks"].as_object_mut().expect("an object");
+    if hooks
+        .get(event)
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        hooks.remove(event);
+    }
+    if hooks.is_empty() {
+        settings.as_object_mut().expect("an object").remove("hooks");
     }
     settings
 }
@@ -141,7 +181,7 @@ fn edit_settings(add: bool) -> Result<PathBuf, String> {
         })?,
         _ => json!({}),
     };
-    let updated = with_hook(current.clone(), &this_exe()?, add);
+    let updated = with_hooks(current.clone(), &this_exe()?, add);
     if updated == current {
         return Ok(path);
     }
@@ -204,7 +244,8 @@ pub fn install(hook: bool) -> Result<Vec<String>, String> {
     if hook {
         let path = edit_settings(true)?;
         done.push(format!(
-            "SessionEnd hook added to {}: each session is written up when it ends",
+            "Hooks added to {}: each session is written up when it ends, and the next one \
+             in the project starts knowing what the last ones did",
             path.display()
         ));
     }
@@ -220,7 +261,7 @@ pub fn uninstall() -> Result<Vec<String>, String> {
         done.push("/fastmind skill removed".into());
     }
     let path = edit_settings(false)?;
-    done.push(format!("SessionEnd hook removed from {}", path.display()));
+    done.push(format!("Hooks removed from {}", path.display()));
     Ok(done)
 }
 
@@ -236,25 +277,25 @@ pub fn status() -> Vec<String> {
         ),
         Err(_) => "MCP server: not added (fastmind agent install)".into(),
     };
-    let hook = claude_settings_file()
+    let settings = claude_settings_file()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|s| {
-            s["hooks"]["SessionEnd"].as_array().map(|groups| {
-                groups
-                    .iter()
-                    .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
-                    .find(is_ours)
-            })
-        })
-        .flatten();
-    let hook = match hook {
-        Some(h) => format!(
-            "SessionEnd hook: on\n  {}",
-            h["command"].as_str().unwrap_or("")
-        ),
-        None => "SessionEnd hook: off (fastmind agent install)".into(),
-    };
+        .unwrap_or(Value::Null);
+    let hooks = HOOKS.iter().map(|(event, arg, _, _)| {
+        let found = settings["hooks"][event].as_array().and_then(|groups| {
+            groups
+                .iter()
+                .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
+                .find(|h| is_ours(h, arg))
+        });
+        match found {
+            Some(h) => format!(
+                "{event} hook: on\n  {}",
+                h["command"].as_str().unwrap_or("")
+            ),
+            None => format!("{event} hook: off (fastmind agent install)"),
+        }
+    });
     let skill = match skill_file() {
         Some(path) if is_our_skill(&path) => format!("/fastmind skill: on\n  {}", path.display()),
         Some(path) if path.exists() => {
@@ -265,7 +306,10 @@ pub fn status() -> Vec<String> {
         }
         _ => "/fastmind skill: off (fastmind agent install)".into(),
     };
-    vec![mcp, hook, skill]
+    let mut lines = vec![mcp];
+    lines.extend(hooks);
+    lines.push(skill);
+    lines
 }
 
 /// The SessionEnd hook: Claude Code sends the session on stdin. The write-up runs in a process
@@ -305,6 +349,62 @@ pub fn session_end() -> Result<(), String> {
     if command.spawn().is_err() {
         // Not allowed to leave Claude Code's job: do it here instead.
         let _ = import()?.status();
+    }
+    Ok(())
+}
+
+/// The SessionStart hook: what it prints goes into the context a new session starts with. It
+/// reads a few notes and never calls a model, so starting stays quick; a session that ended
+/// without a write-up (crashed, killed) gets one in the background.
+pub fn session_start() -> Result<(), String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| e.to_string())?;
+    let event: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
+    let cwd = event["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("no working folder")?;
+    let settings = fastmind_core::config::Settings::load();
+    // The project's notebook, else the usual one; never a folder the user didn't make.
+    let Some(root) = settings
+        .notebook_for(&cwd)
+        .or(settings.notebook.as_ref())
+        .filter(|root| root.is_dir())
+    else {
+        return Ok(());
+    };
+    let nb = fastmind_core::notebook::Notebook { root: root.clone() };
+    let transcript = event["transcript_path"].as_str().map(PathBuf::from);
+    if let Some(missed) = transcript.as_ref().and_then(|current| {
+        let dir = current.parent()?;
+        fastmind_core::sessions::missed(&nb, &settings.ai, dir, current, chrono::Local::now())
+    }) {
+        let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        command
+            .arg("import-session")
+            .arg(&missed)
+            .current_dir(&cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach(&mut command);
+        // If it can't start apart from Claude Code, the next session start tries again.
+        let _ = command.spawn();
+    }
+    if let Some(context) =
+        fastmind_core::sessions::context(&nb, &settings.ai, &cwd.to_string_lossy())
+    {
+        let output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": context,
+            }
+        });
+        println!("{output}");
     }
     Ok(())
 }
@@ -352,23 +452,38 @@ mod tests {
                 "Stop": [{ "hooks": [{ "type": "command", "command": "echo stop" }] }]
             }
         });
-        let added = with_hook(mine.clone(), r"C:\Tools\fastmind.exe", true);
-        let again = with_hook(added.clone(), r"D:\New\fastmind.exe", true);
+        let added = with_hooks(mine.clone(), r"C:\Tools\fastmind.exe", true);
+        let again = with_hooks(added.clone(), r"D:\New\fastmind.exe", true);
         let groups = again["hooks"]["SessionEnd"].as_array().unwrap();
         assert_eq!(groups.len(), 2, "the user's hook stays, ours once: {again}");
         assert_eq!(
             groups[1]["hooks"][0]["command"],
             r#""D:\New\fastmind.exe" hook session-end"#
         );
+        let start = again["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(start.len(), 1, "{again}");
+        assert_eq!(start[0]["matcher"], "startup|clear");
+        assert_eq!(
+            start[0]["hooks"][0]["command"],
+            r#""D:\New\fastmind.exe" hook session-start"#
+        );
         assert_eq!(again["model"], "opus");
         assert_eq!(again["hooks"]["Stop"], mine["hooks"]["Stop"]);
-        let removed = with_hook(again, "x", false);
+        let removed = with_hooks(again, "x", false);
         assert_eq!(
             removed, mine,
-            "removing it gives the user's settings back exactly"
+            "removing them gives the user's settings back exactly"
         );
-        let empty = with_hook(json!({}), "C:/fm/fastmind.exe", true);
-        assert!(is_ours(&empty["hooks"]["SessionEnd"][0]["hooks"][0]));
+        let empty = with_hooks(json!({}), "C:/fm/fastmind.exe", true);
+        assert!(is_ours(
+            &empty["hooks"]["SessionEnd"][0]["hooks"][0],
+            "session-end"
+        ));
+        assert!(!is_ours(
+            &empty["hooks"]["SessionEnd"][0]["hooks"][0],
+            "session-start"
+        ));
+        assert_eq!(with_hooks(empty, "x", false), json!({}));
     }
 
     #[test]
