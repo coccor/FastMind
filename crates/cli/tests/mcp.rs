@@ -37,6 +37,7 @@ fn an_agent_can_search_and_save_findings() {
         json!({"jsonrpc": "2.0", "id": 5, "method": "nope"}),
         json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/list"}),
         json!({"jsonrpc": "2.0", "id": 7, "method": "prompts/get", "params": {"name": "note", "arguments": {"focus": "the ledger index"}}}),
+        json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "note_instructions", "arguments": {"focus": "the ledger index"}}}),
     ];
     {
         let stdin = child.stdin.as_mut().unwrap();
@@ -53,11 +54,11 @@ fn an_agent_can_search_and_save_findings() {
         .collect();
     assert_eq!(
         replies.len(),
-        7,
+        8,
         "one reply per request, none for the notification"
     );
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "fastmind");
-    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 5);
     assert!(
         replies[2]["result"]["content"][0]["text"]
             .as_str()
@@ -99,4 +100,9 @@ fn an_agent_can_search_and_save_findings() {
         prompt.contains("# Write up an AI coding session"),
         "the notebook's ai-session skill is in it"
     );
+
+    // The same text as a tool, for the /fastmind skill.
+    let tool = &replies[7]["result"];
+    assert_eq!(tool["isError"], false, "{tool}");
+    assert_eq!(tool["content"][0]["text"].as_str().unwrap(), prompt);
 }

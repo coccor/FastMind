@@ -51,9 +51,9 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
                           Serve the app's UI and API on localhost (for a browser)
   mcp                     Serve the notebook to coding agents (MCP over stdio)
   agent install [--no-hook] | uninstall | status
-                          Connect FastMind to Claude Code: the MCP server (with the
-                          /mcp__fastmind__note command) and a SessionEnd hook that
-                          writes up each session when it ends
+                          Connect FastMind to Claude Code: the MCP server, the
+                          /fastmind skill and a SessionEnd hook that writes up
+                          each session when it ends
   import-session FILE     Write up one Claude Code or Codex transcript now
   settings                Show where settings live and what they are
 

@@ -129,9 +129,12 @@ shows it with this computer's path):
 fastmind agent install      # agent status | agent uninstall
 ```
 
-- **`/mcp__fastmind__note`** in any Claude Code session writes up the work, following the
+- **`/fastmind`** in any Claude Code session writes up the work, following the
   notebook's `ai-session` skill, and saves it. Add words after it to focus the note:
-  `/mcp__fastmind__note the decision about the cache`.
+  `/fastmind the decision about the cache`. It's a skill in `~/.claude/skills/fastmind/` that
+  `fastmind agent install` adds; it fetches the steps from the MCP server's `note_instructions`
+  tool. The same thing is the MCP prompt `/mcp__fastmind__note` (Claude Code names MCP prompts
+  `/mcp__<server>__<prompt>`, hence the skill).
 - **Every session is written up when it ends**, by a `SessionEnd` hook. The hook hands the
   transcript to a background `fastmind import-session`, so quitting doesn't wait; sessions with
   nothing worth keeping get no note. What happened is logged in `session-hook.log` beside the
