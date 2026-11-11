@@ -276,7 +276,12 @@ pub fn session_end() -> Result<(), String> {
         .read_to_string(&mut input)
         .map_err(|e| e.to_string())?;
     let event: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
-    let Some(transcript) = event["transcript_path"].as_str().filter(|p| !p.is_empty()) else {
+    // `claude mcp …` and other commands that never start a session still fire SessionEnd,
+    // with a transcript that was never written: nothing to do, and nothing worth logging.
+    let Some(transcript) = event["transcript_path"]
+        .as_str()
+        .filter(|p| !p.is_empty() && Path::new(p).is_file())
+    else {
         return Ok(());
     };
     // Run in the session's folder, so a project with a notebook of its own gets the note.
