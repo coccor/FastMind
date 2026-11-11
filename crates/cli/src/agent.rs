@@ -1,18 +1,78 @@
 //! FastMind inside Claude Code: the MCP server (search, read, ask, save, and the `note` prompt,
-//! which Claude Code shows as `/mcp__fastmind__note`) and a SessionEnd hook that writes up each
-//! session as soon as it ends.
+//! which Claude Code shows as `/mcp__fastmind__note`), a `/fastmind` skill that does the same
+//! under a shorter name, and a SessionEnd hook that writes up each session as soon as it ends.
 
 use serde_json::{Value, json};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Claude Code's user folder: `~/.claude`, or `CLAUDE_CONFIG_DIR`.
+fn claude_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    directories::BaseDirs::new().map(|d| d.home_dir().join(".claude"))
+}
+
 /// Claude Code's user settings, where hooks live.
 pub fn claude_settings_file() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        return Some(PathBuf::from(dir).join("settings.json"));
+    claude_dir().map(|d| d.join("settings.json"))
+}
+
+/// The `/fastmind` skill. Claude Code names MCP prompts `/mcp__<server>__<prompt>`, so the
+/// short name needs a skill of its own.
+pub fn skill_file() -> Option<PathBuf> {
+    claude_dir().map(|d| d.join("skills").join("fastmind").join("SKILL.md"))
+}
+
+/// Marks the skill as FastMind's, so a `fastmind` skill the user wrote is never touched.
+const SKILL_MARK: &str = "Added by `fastmind agent install`";
+
+/// The skill only points at the `note_instructions` tool, so the steps, the ai-session skill
+/// and the user's writing preferences stay in one place and are read fresh each time.
+pub const SKILL: &str = "---
+name: fastmind
+description: Write up this session as a note in the user's FastMind notebook and save it. Use when the user asks to note, save or write up the session or the work in FastMind.
+argument-hint: [what the note should focus on]
+---
+
+<!-- Added by `fastmind agent install`; `fastmind agent uninstall` removes it. -->
+
+Call the `note_instructions` tool of the `fastmind` MCP server and do what it returns. If the
+text in the quotes is not empty, pass it as `focus`: \"$ARGUMENTS\".
+
+If the `fastmind` MCP server isn't connected, say so and suggest running `fastmind agent install`.
+";
+
+fn is_our_skill(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|t| t.contains(SKILL_MARK))
+}
+
+/// Writes the skill, unless the user has a `fastmind` skill of their own there.
+fn write_skill() -> Result<Option<PathBuf>, String> {
+    let path = skill_file().ok_or("couldn't find your home folder")?;
+    if path.exists() && !is_our_skill(&path) {
+        return Ok(None);
     }
-    directories::BaseDirs::new().map(|d| d.home_dir().join(".claude").join("settings.json"))
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    fastmind_core::fsx::write_atomic(&path, SKILL.as_bytes()).map_err(|e| e.0)?;
+    Ok(Some(path))
+}
+
+/// Removes the skill if it's ours; true when it removed something.
+fn remove_skill() -> Result<bool, String> {
+    let Some(path) = skill_file().filter(|p| is_our_skill(p)) else {
+        return Ok(false);
+    };
+    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    // The folder too, if nothing else is in it.
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::remove_dir(dir);
+    }
+    Ok(true)
 }
 
 fn this_exe() -> Result<String, String> {
@@ -130,7 +190,17 @@ pub fn install(hook: bool) -> Result<Vec<String>, String> {
     done.push(format!(
         "MCP server \"fastmind\" added for all your projects ({exe} mcp)"
     ));
-    done.push("In Claude Code, /mcp__fastmind__note writes up the session and saves it".into());
+    match write_skill()? {
+        Some(path) => done.push(format!(
+            "Skill added at {}: in Claude Code, /fastmind writes up the session and saves it",
+            path.display()
+        )),
+        None => done.push(
+            "You already have a skill called fastmind, so it was left alone; \
+             /mcp__fastmind__note writes up the session and saves it"
+                .into(),
+        ),
+    }
     if hook {
         let path = edit_settings(true)?;
         done.push(format!(
@@ -145,6 +215,9 @@ pub fn uninstall() -> Result<Vec<String>, String> {
     let mut done = Vec::new();
     if run_claude(&["mcp", "remove", "--scope", "user", "fastmind"]).is_ok() {
         done.push("MCP server \"fastmind\" removed".into());
+    }
+    if remove_skill()? {
+        done.push("/fastmind skill removed".into());
     }
     let path = edit_settings(false)?;
     done.push(format!("SessionEnd hook removed from {}", path.display()));
@@ -182,7 +255,17 @@ pub fn status() -> Vec<String> {
         ),
         None => "SessionEnd hook: off (fastmind agent install)".into(),
     };
-    vec![mcp, hook]
+    let skill = match skill_file() {
+        Some(path) if is_our_skill(&path) => format!("/fastmind skill: on\n  {}", path.display()),
+        Some(path) if path.exists() => {
+            format!(
+                "/fastmind skill: yours, not FastMind's\n  {}",
+                path.display()
+            )
+        }
+        _ => "/fastmind skill: off (fastmind agent install)".into(),
+    };
+    vec![mcp, hook, skill]
 }
 
 /// The SessionEnd hook: Claude Code sends the session on stdin. The write-up runs in a process
@@ -193,23 +276,35 @@ pub fn session_end() -> Result<(), String> {
         .read_to_string(&mut input)
         .map_err(|e| e.to_string())?;
     let event: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
-    let Some(transcript) = event["transcript_path"].as_str().filter(|p| !p.is_empty()) else {
+    // `claude mcp …` and other commands that never start a session still fire SessionEnd,
+    // with a transcript that was never written: nothing to do, and nothing worth logging.
+    let Some(transcript) = event["transcript_path"]
+        .as_str()
+        .filter(|p| !p.is_empty() && Path::new(p).is_file())
+    else {
         return Ok(());
     };
-    let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-    command
-        .args(["import-session", transcript])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    // Run in the session's folder, so a project with a notebook of its own gets the note.
+    let cwd = event["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir());
+    let import = || -> Result<Command, String> {
+        let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        command
+            .args(["import-session", transcript])
+            .stdin(Stdio::null());
+        if let Some(dir) = &cwd {
+            command.current_dir(dir);
+        }
+        Ok(command)
+    };
+    let mut command = import()?;
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     detach(&mut command);
     if command.spawn().is_err() {
         // Not allowed to leave Claude Code's job: do it here instead.
-        let mut inline = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-        inline
-            .args(["import-session", transcript])
-            .stdin(Stdio::null());
-        let _ = inline.status();
+        let _ = import()?.status();
     }
     Ok(())
 }
@@ -274,5 +369,14 @@ mod tests {
         );
         let empty = with_hook(json!({}), "C:/fm/fastmind.exe", true);
         assert!(is_ours(&empty["hooks"]["SessionEnd"][0]["hooks"][0]));
+    }
+
+    #[test]
+    fn the_skill_is_called_fastmind_and_points_at_the_tool() {
+        let front = SKILL.split("---").nth(1).unwrap();
+        assert!(front.contains("\nname: fastmind\n"));
+        assert!(front.contains("\ndescription: "));
+        assert!(SKILL.contains("note_instructions") && SKILL.contains("$ARGUMENTS"));
+        assert!(SKILL.contains(SKILL_MARK));
     }
 }

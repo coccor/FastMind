@@ -61,6 +61,8 @@ The first run, and each `fastmind model …`, checks the AI answers before anyth
 
 ```
 fastmind setup ~/Notes                    # choose the notebook
+fastmind project set ~/Plans/api/notes    # this project (and agents in it) use its own notebook
+fastmind project | project unset [DIR]    # which projects have one; give one up
 fastmind capture "lag spikes in the ledger batch" --tag perf --attach ./ledger.log
 fastmind write "Fresh memories/Lag.md"    # write a captured note (again) with the model
 fastmind search "#perf ledger"

@@ -125,7 +125,7 @@ Never proposed: "Work" (a `type: project` home note) and "Reading list" (`pin: t
    MCP server and the SessionEnd hook; `fastmind agent status` shows both.
 2. In a Claude Code session ask "search my notes for the ledger lag". It calls `search_notes`
    and reads the note.
-3. Type `/mcp__fastmind__note` when the work is done. Claude searches for related notes, writes
+3. Type `/fastmind` when the work is done. Claude searches for related notes, writes
    the session up (a short title, a summary, what was found, decided and done) and saves it;
    it says what it saved.
 4. Quit the session. A second later the hook has handed it off; a few seconds after that a note
