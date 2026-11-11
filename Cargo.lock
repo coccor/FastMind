@@ -1053,6 +1053,7 @@ dependencies = [
 name = "fastmind-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "directories",
  "fastmind-core",
  "opener",

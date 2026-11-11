@@ -139,6 +139,13 @@ fastmind agent install      # agent status | agent uninstall
   transcript to a background `fastmind import-session`, so quitting doesn't wait; sessions with
   nothing worth keeping get no note. What happened is logged in `session-hook.log` beside the
   settings file.
+- **Every session starts knowing what the last ones did**, by a `SessionStart` hook: the
+  title, date, branch and summary of the project's five newest session notes, with their
+  paths, so the agent can `read_note` one or `search_notes` for more. It reads only that
+  project's folder in `AI sessions` and calls no model, so starting stays quick. It runs when
+  a session starts or after `/clear`, not on resume or after a compaction. If the session
+  before ended without a write-up (the terminal was closed, it crashed), the hook writes that
+  one up in the background once it has been quiet for the usual 20 minutes.
 - Agents can also `search_notes`, `read_note` and `ask_notebook` before they dig into
   something, and `save_finding` (title, summary, body, kind, tags) whenever they learn
   something. Findings land as fresh memories tagged `agent`, with secrets removed.

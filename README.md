@@ -103,8 +103,9 @@ fastmind agent install
 ```
 
 That connects Claude Code: the MCP server for every project (`search_notes`, `read_note`,
-`ask_notebook`, `save_finding`), a `/fastmind` skill to write up the work, and a `SessionEnd`
-hook that writes up each session when it ends. Codex and Claude Desktop use `fastmind mcp`.
+`ask_notebook`, `save_finding`), a `/fastmind` skill to write up the work, a `SessionEnd`
+hook that writes up each session when it ends, and a `SessionStart` hook that tells the next
+session in the project what the last ones did. Codex and Claude Desktop use `fastmind mcp`.
 [More on agents](docs/features.md#coding-agents).
 
 ## FAQ

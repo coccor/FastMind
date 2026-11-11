@@ -23,8 +23,10 @@ mattered during the session.
 ## When there's nothing to keep
 
 Many sessions hold nothing worth a note: a question asked and abandoned, a request with no work
-done, a quick lookup, a session that only ran a command. Then write no note (your answer says
-how). A notebook full of empty session notes is worse than a missing one.
+done, a quick lookup, a session that only ran a command. A session may open with the agent
+restating what earlier sessions did (it's told at the start); that recap, a greeting or a "what's
+next?" is not work. Then write no note (your answer says how). A notebook full of empty session
+notes is worse than a missing one.
 
 Never suggest next steps, causes or fixes the session didn't reach. The note records what
 happened, not what could happen.
