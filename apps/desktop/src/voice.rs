@@ -297,6 +297,18 @@ fn start_microphone(app: AppHandle) -> Result<Microphone, String> {
     Ok((stop, thread, samples, rate))
 }
 
+/// Tells the stream the speech is over. The model holds back its last words until it hears a
+/// little more, so it gets a moment of silence first. A stream keeps the sample rate of the
+/// first audio it was given, and sherpa-onnx *exits the whole process* if a later chunk says
+/// otherwise: the silence must use the same `rate` as everything before it.
+fn end_of_speech(stream: &sherpa_onnx::OnlineStream, rate: u32) {
+    stream.accept_waveform(
+        rate as i32,
+        &vec![0.0; (rate as f32 * TAIL_SECONDS) as usize],
+    );
+    stream.input_finished();
+}
+
 /// Runs while the person talks: feeds what the microphone hears to the model and tells the page
 /// the words so far (`voice-partial`) whenever they change, then lets the model finish what it
 /// is holding back once recording is over and returns all the words.
@@ -325,9 +337,7 @@ fn write_down(
             stream.accept_waveform(rate as i32, &heard);
         }
         if finished {
-            // The model holds back its last words until it hears a little more.
-            stream.accept_waveform(16_000, &vec![0.0; (16_000.0 * TAIL_SECONDS) as usize]);
-            stream.input_finished();
+            end_of_speech(&stream, rate);
         }
         while recognizer.is_ready(&stream) {
             recognizer.decode(&stream);
@@ -515,13 +525,32 @@ mod tests {
                 recognizer.decode(&stream);
             }
         }
-        stream.accept_waveform(16_000, &vec![0.0; (16_000.0 * TAIL_SECONDS) as usize]);
-        stream.input_finished();
+        end_of_speech(&stream, wave.sample_rate() as u32);
         while recognizer.is_ready(&stream) {
             recognizer.decode(&stream);
         }
         let text = recognizer.get_result(&stream).unwrap().text;
         eprintln!("HEARD ({:?}): {text}", began.elapsed());
+        assert!(!text.trim().is_empty());
+
+        // Microphones rarely record at 16 kHz. A stream fed at 44.1 kHz (as the app does) must
+        // also finish cleanly: getting this wrong ends the whole process.
+        let up: Vec<f32> = (0..wave.samples().len() * 441 / 160)
+            .map(|i| wave.samples()[(i * 160 / 441).min(wave.samples().len() - 1)])
+            .collect();
+        let stream = recognizer.create_stream();
+        for chunk in up.chunks(4410) {
+            stream.accept_waveform(44_100, chunk);
+            while recognizer.is_ready(&stream) {
+                recognizer.decode(&stream);
+            }
+        }
+        end_of_speech(&stream, 44_100);
+        while recognizer.is_ready(&stream) {
+            recognizer.decode(&stream);
+        }
+        let text = recognizer.get_result(&stream).unwrap().text;
+        eprintln!("HEARD at 44.1 kHz: {text}");
         assert!(!text.trim().is_empty());
     }
 }
