@@ -1229,11 +1229,8 @@ function voiceButton(button, area) {
   status.hidden = true;
   button.before(status);
   const say = (text) => { status.hidden = !text; status.textContent = text; };
-  let download = "";   // "Downloading the speech model… 40%", while that's going on
-  // idle -> starting -> listening -> working -> idle
+  // idle -> starting -> listening -> working (the model finishing the last words) -> idle
   let state = "idle";
-  let polishing = 0;      // which polish is current (0: none); a new recording or Ctrl+Enter ends it
-  let inserted = null;    // the words last dictated, and where, so a polish can replace them
   let held = false;       // started by holding Space: letting go ends it
   let released = false;   // let go before the microphone was ready
   let anchor = null;      // the text around the spot where the words go
@@ -1247,13 +1244,12 @@ function voiceButton(button, area) {
     area.readOnly = next === "listening" || next === "working";
     if (next !== "listening") bar.style.transform = "scaleX(0)";
     const words = { starting: "Starting…", listening: "Listening", working: "Finishing…" }[next] || "";
-    if (next !== "idle") say(download || words);
-    else if (!polishing) say("");
+    if (next !== "idle") say(words);
+    else say("");
   };
   const render = (text) => {
     const gap = text && anchor.before && !/\s$/.test(anchor.before) ? " " : "";
     const value = anchor.before + gap + text;
-    inserted = { start: anchor.before.length, text: gap + text };
     area.value = value + anchor.after;
     area.selectionStart = area.selectionEnd = value.length;
     area.scrollTop = area.scrollHeight;
@@ -1261,41 +1257,8 @@ function voiceButton(button, area) {
   };
   const restore = () => { if (anchor) render(""); };
 
-  const stopPolishing = () => {
-    if (!polishing) return;
-    polishing = 0;
-    tauri.core.invoke("voice_polish_cancel").catch(() => {});
-    say("");
-  };
-  // After the quick pass: the careful model goes over the same words and, if you haven't
-  // touched them since, swaps in its better version. Saving or recording again drops it.
-  const polish = async () => {
-    const mine = ++polishing;
-    const mark = inserted;
-    say("Polishing…");
-    try {
-      const better = await tauri.core.invoke("voice_polish");
-      if (mine !== polishing || !better || !mark) return;
-      const now = area.value.slice(mark.start, mark.start + mark.text.length);
-      if (now !== mark.text) return;   // edited meanwhile: leave it alone
-      const gap = mark.text.startsWith(" ") ? " " : "";
-      const trail = /\s$/.test(mark.text) ? " " : "";
-      const fresh = gap + better + trail;
-      const caret = area.selectionEnd;
-      area.value = area.value.slice(0, mark.start) + fresh + area.value.slice(mark.start + mark.text.length);
-      const end = mark.start + mark.text.length;
-      if (caret >= end) area.selectionStart = area.selectionEnd = caret + fresh.length - mark.text.length;
-      area.dispatchEvent(new Event("input", { bubbles: true }));
-    } catch {
-      // Polishing is a bonus: the quick words stay.
-    } finally {
-      if (mine === polishing) { polishing = 0; if (state === "idle") say(""); }
-    }
-  };
-
   const start = async () => {
     if (state !== "idle") return;
-    stopPolishing();
     set("starting");
     released = false;
     const at = area.selectionEnd ?? area.value.length;
@@ -1318,10 +1281,6 @@ function voiceButton(button, area) {
     try {
       const text = await tauri.core.invoke("voice_stop");
       if (text) { render(text + (anchor.after && /^\s/.test(anchor.after) ? "" : " ")); } else { restore(); toast("Didn't catch anything."); }
-      set("idle");
-      area.focus();
-      if (text) polish();
-      return;
     } catch (error) {
       restore();
       toast(String(error), true);
@@ -1342,7 +1301,6 @@ function voiceButton(button, area) {
   // later, the space (and any repeats of it) is taken back and the recording begins. This
   // doesn't depend on `event.repeat`, which the Linux webview doesn't set.
   const HOLD_MS = 280;
-  const dbg = (message) => tauri.core.invoke("voice_log", { message }).catch(() => {});   // TEMP
   let holdTimer = null;
   let spaceDown = false;
   let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
@@ -1360,14 +1318,12 @@ function voiceButton(button, area) {
     area.selectionStart = before.start;
     area.selectionEnd = before.end;
     held = true;
-    dbg("hold detected: starting");
     start();
   };
   const disarm = () => { clearTimeout(holdTimer); holdTimer = null; spaceDown = false; };
   const isSpace = (event) => event.code === "Space" || event.key === " ";
   let releaseTimer = null;
   area.addEventListener("keydown", (event) => {
-    if (isSpace(event)) dbg(`keydown repeat=${event.repeat} state=${state} down=${spaceDown} mods=${+event.ctrlKey}${+event.altKey}${+event.metaKey}`);
     if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey) return;
     // Some systems report a held key as release + press, again and again: a release followed
     // at once by another press is the same hold.
@@ -1385,7 +1341,6 @@ function voiceButton(button, area) {
   });
   area.addEventListener("keyup", (event) => {
     if (!isSpace(event)) return;
-    dbg(`keyup state=${state} held=${held} down=${spaceDown}`);
     event.preventDefault();
     clearTimeout(releaseTimer);
     releaseTimer = setTimeout(() => {
@@ -1406,11 +1361,10 @@ function voiceButton(button, area) {
   const finish = async () => {
     while (state === "starting" || state === "working") await new Promise((r) => setTimeout(r, 30));
     if (state === "listening") await stop();
-    stopPolishing();   // save what's there now: no waiting for the careful pass
   };
   return { cancel, finish };
 }
-// The download shows up in each microphone's status label (see `download` above).
+// The first-time download shows in the status label of whichever microphone is in use.
 tauri?.event.listen("voice-model-progress", (event) => {
   document.querySelectorAll(".voice-status").forEach((label) => {
     if (label.hidden) return;

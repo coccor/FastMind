@@ -1,8 +1,11 @@
-//! Speech to text: record from the microphone, then turn it into text with whisper.cpp on this
-//! computer. Nothing is sent anywhere except the one-time download of the model.
+//! Speech to text: record from the microphone and turn it into text, as you talk, with NVIDIA's
+//! Nemotron streaming model running on this computer through sherpa-onnx. Nothing is sent
+//! anywhere except the one-time download of the model.
 
+use bzip2::read::BzDecoder;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use sha2::{Digest, Sha256};
+use sherpa_onnx::{OnlineModelConfig, OnlineRecognizer, OnlineRecognizerConfig};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -11,35 +14,28 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-/// A speech model, pinned to a commit of the model repository with the size and SHA-256 of the
-/// file there, so a changed or cut-short download is never loaded.
-struct ModelSpec {
-    file: &'static str,
-    url: &'static str,
-    size: u64,
-    sha256: &'static str,
-}
-
-/// Writes the words down while you talk: quick, a little less careful.
-const FAST: ModelSpec = ModelSpec {
-    file: "ggml-base.en.bin",
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin",
-    size: 147_964_211,
-    sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
-};
-/// Goes over the last stretch once you let go: slower, more accurate.
-const ACCURATE: ModelSpec = ModelSpec {
-    file: "ggml-small.en.bin",
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin",
-    size: 487_614_201,
-    sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-};
-/// What whisper expects.
-const SAMPLE_RATE: u32 = 16_000;
-/// Anything shorter is a mis-click, not speech.
-const MIN_SECONDS: f32 = 0.4;
+/// The model: `sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8`, English, which
+/// writes punctuation and capitals as it goes. It's downloaded from the sherpa-onnx releases as
+/// one archive, pinned by the size and SHA-256 GitHub publishes for that file, and unpacked
+/// into the app's data folder. NVIDIA's model licence applies to it.
+const MODEL_NAME: &str = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25";
+const ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2";
+const ARCHIVE_SIZE: u64 = 463_945_051;
+const ARCHIVE_SHA256: &str = "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358";
+/// The files the recogniser needs, and their sizes (how an installed model is recognised).
+const MODEL_FILES: [(&str, u64); 4] = [
+    ("encoder.int8.onnx", 652_916_849),
+    ("decoder.int8.onnx", 7_257_753),
+    ("joiner.int8.onnx", 1_735_862),
+    ("tokens.txt", 8_952),
+];
+/// Two threads were as fast as four on a 4-core laptop, and leave the window responsive.
+const THREADS: i32 = 2;
+/// How often the words so far are looked at while talking.
+const LIVE_EVERY: Duration = Duration::from_millis(100);
+/// Silence fed in after the last word so the model finishes what it's holding back.
+const TAIL_SECONDS: f32 = 0.8;
 
 /// The open stream, the samples it fills (mono, at the microphone's own rate), that rate, and
 /// the loudness of the latest sound (an `f32` between 0 and 1, stored as bits).
@@ -47,20 +43,6 @@ type Started = (cpal::Stream, Arc<Mutex<Vec<f32>>>, u32, Arc<AtomicU32>);
 
 /// A running microphone: how to stop it, its thread, the samples it fills and their rate.
 type Microphone = (Sender<()>, JoinHandle<()>, Arc<Mutex<Vec<f32>>>, u32);
-
-/// How long between tries at writing down what has been said so far.
-const LIVE_EVERY: Duration = Duration::from_millis(700);
-/// After this much speech in one piece, what's been written is kept and a new piece begins, so a
-/// long dictation doesn't get slower and slower.
-const PIECE_SECONDS: usize = 12;
-/// ...or, better, at a pause once there's this much.
-const PAUSE_AFTER_SECONDS: f32 = 3.0;
-/// The careful model goes over a dictation in pieces about this long (cut at pauses), so it can
-/// be stopped between them and a new recording isn't kept waiting.
-const POLISH_TARGET_SECONDS: usize = 6;
-const POLISH_MAX_SECONDS: usize = 10;
-/// Quieter than this is silence: no point asking the model, which makes up words for noise.
-const SILENCE: f32 = 0.01;
 
 struct Recording {
     stop_mic: Sender<()>,
@@ -73,110 +55,152 @@ struct Recording {
 #[derive(Default)]
 pub struct Voice {
     recording: Mutex<Option<Recording>>,
-    fast: Mutex<Option<Arc<WhisperContext>>>,
-    accurate: Mutex<Option<Arc<WhisperContext>>>,
-    download: Mutex<()>,
-    /// Whisper must not set up a model while another is working (a pass in flight fails with
-    /// "failed to encode"): loading and every pass take turns on this.
-    engine: Mutex<()>,
-    /// The last dictation, at 16 kHz, kept so `voice_polish` can go over it with the careful model.
-    last_audio: Mutex<Option<Vec<f32>>>,
-    /// Asks a running polish to stop (a new recording, or saving, has made it pointless).
-    polish_cancel: AtomicBool,
+    recognizer: Mutex<Option<Arc<OnlineRecognizer>>>,
+    /// One download or load at a time.
+    setup: Mutex<()>,
 }
 
-fn model_path(spec: &ModelSpec) -> PathBuf {
+fn models_dir() -> PathBuf {
     directories::ProjectDirs::from("dev", "coccor", "FastMind")
         .map(|dirs| dirs.data_dir().join("models"))
         .unwrap_or_else(|| PathBuf::from("fastmind-models"))
-        .join(spec.file)
+}
+
+fn model_dir() -> PathBuf {
+    models_dir().join(MODEL_NAME)
 }
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Whether the model is on disk at the right size. The file only gets its name after the whole
-/// download matched the pinned SHA-256 (see `ensure_model`), so the size is enough to notice a
-/// cut-short or swapped file without re-reading 490 MB on every start.
-fn model_is_present(spec: &ModelSpec) -> bool {
-    std::fs::metadata(model_path(spec)).is_ok_and(|m| m.len() == spec.size)
+/// Whether the model is unpacked, every file at its size. The files only appear after the
+/// archive they came from matched its pinned SHA-256 (see `ensure_model`).
+fn model_is_present(dir: &std::path::Path) -> bool {
+    MODEL_FILES
+        .iter()
+        .all(|(name, size)| std::fs::metadata(dir.join(name)).is_ok_and(|m| m.len() == *size))
 }
 
-/// Downloads the model the first time, telling the UI how far along it is.
-fn ensure_model(app: &AppHandle, voice: &Voice, spec: &ModelSpec) -> Result<PathBuf, String> {
-    let path = model_path(spec);
-    let _one_at_a_time = voice.download.lock().expect("download lock");
-    if path.exists() {
-        if model_is_present(spec) {
-            return Ok(path);
-        }
-        // Damaged or replaced: fetch it again rather than load it.
-        let _ = std::fs::remove_file(&path);
+/// Downloads the model archive the first time, checking it against the pinned size and SHA-256
+/// while it arrives, then unpacks just the files the recogniser uses.
+fn ensure_model(
+    folder: &std::path::Path,
+    mut progress: impl FnMut(u64),
+) -> Result<PathBuf, String> {
+    let dir = folder.join(MODEL_NAME);
+    if model_is_present(&dir) {
+        return Ok(dir);
     }
-    std::fs::create_dir_all(path.parent().expect("model folder")).map_err(|e| e.to_string())?;
-    let response = ureq::get(spec.url)
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    let archive = folder.join(format!("{MODEL_NAME}.tar.bz2.part"));
+    let response = ureq::get(ARCHIVE_URL)
         .call()
         .map_err(|e| format!("Couldn't download the speech model: {e}"))?;
-    let total = spec.size;
-    let partial = path.with_extension("part");
-    let mut file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
     let mut reader = response.into_reader();
     let mut buffer = vec![0u8; 256 * 1024];
     let mut hash = Sha256::new();
     let (mut done, mut last) = (0u64, 0u64);
-    loop {
-        let n = reader.read(&mut buffer).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
+    let downloaded = (|| -> Result<(), String> {
+        loop {
+            let n = reader.read(&mut buffer).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+            hash.update(&buffer[..n]);
+            done += n as u64;
+            if done > ARCHIVE_SIZE {
+                break;
+            }
+            if done - last > ARCHIVE_SIZE / 100 {
+                last = done;
+                progress(done * 100 / ARCHIVE_SIZE);
+            }
         }
-        file.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
-        hash.update(&buffer[..n]);
-        done += n as u64;
-        if done > total {
-            break;
-        }
-        if done - last > total / 100 {
-            last = done;
-            let _ = app.emit("voice-model-progress", done * 100 / total);
-        }
-    }
-    file.flush().map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())
+    })();
     drop(file);
-    if done != total || hex(&hash.finalize()) != spec.sha256 {
-        let _ = std::fs::remove_file(&partial);
-        return Err("The speech model download was incomplete or didn't match; try again.".into());
-    }
-    std::fs::rename(&partial, &path).map_err(|e| e.to_string())?;
-    let _ = app.emit("voice-model-progress", 100u64);
-    Ok(path)
+    let result = downloaded.and_then(|()| {
+        if done != ARCHIVE_SIZE || hex(&hash.finalize()) != ARCHIVE_SHA256 {
+            return Err(
+                "The speech model download was incomplete or didn't match; try again.".into(),
+            );
+        }
+        unpack_model(&archive, &dir)
+    });
+    let _ = std::fs::remove_file(&archive);
+    result?;
+    progress(100);
+    Ok(dir)
 }
 
-fn load_model(
-    app: &AppHandle,
-    voice: &Voice,
-    spec: &'static ModelSpec,
-) -> Result<Arc<WhisperContext>, String> {
-    let slot = if spec.file == FAST.file {
-        &voice.fast
-    } else {
-        &voice.accurate
-    };
-    if let Some(model) = slot.lock().expect("model lock").clone() {
-        return Ok(model);
+/// Takes the model files out of the archive by name (nothing else, and never by a path from
+/// the archive), into `dir`.
+fn unpack_model(archive: &std::path::Path, dir: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut tar = tar::Archive::new(BzDecoder::new(file));
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for entry in tar.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let name = entry
+            .path()
+            .map_err(|e| e.to_string())?
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !MODEL_FILES.iter().any(|(wanted, _)| *wanted == name) {
+            continue;
+        }
+        let partial = dir.join(format!("{name}.part"));
+        let mut out = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())?;
+        std::fs::rename(&partial, dir.join(&name)).map_err(|e| e.to_string())?;
     }
-    let path = ensure_model(app, voice, spec)?;
-    let context = {
-        let _alone = voice.engine.lock().expect("engine lock");
-        WhisperContext::new_with_params(
-            path.to_str().ok_or("The model path isn't valid text")?,
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| format!("Couldn't load the speech model: {e}"))?
+    if model_is_present(dir) {
+        Ok(())
+    } else {
+        Err("The speech model archive didn't contain what was expected.".into())
+    }
+}
+
+fn create_recognizer(dir: &std::path::Path) -> Result<OnlineRecognizer, String> {
+    let file = |name: &str| Some(dir.join(name).to_string_lossy().into_owned());
+    let mut model_config = OnlineModelConfig {
+        tokens: file("tokens.txt"),
+        num_threads: THREADS,
+        ..Default::default()
     };
-    let context = Arc::new(context);
-    *slot.lock().expect("model lock") = Some(context.clone());
-    Ok(context)
+    model_config.transducer.encoder = file("encoder.int8.onnx");
+    model_config.transducer.decoder = file("decoder.int8.onnx");
+    model_config.transducer.joiner = file("joiner.int8.onnx");
+    let config = OnlineRecognizerConfig {
+        model_config,
+        decoding_method: Some("greedy_search".into()),
+        ..Default::default()
+    };
+    OnlineRecognizer::create(&config).ok_or_else(|| {
+        "Couldn't load the speech model; delete the models folder and try again.".into()
+    })
+}
+
+/// The recogniser, loaded once (about 5 seconds the first time) and kept.
+fn load_recognizer(app: &AppHandle, voice: &Voice) -> Result<Arc<OnlineRecognizer>, String> {
+    let _one_at_a_time = voice.setup.lock().expect("setup lock");
+    if let Some(recognizer) = voice.recognizer.lock().expect("recognizer lock").clone() {
+        return Ok(recognizer);
+    }
+    let dir = ensure_model(&models_dir(), |percent| {
+        let _ = app.emit("voice-model-progress", percent);
+    })?;
+    let recognizer = Arc::new(create_recognizer(&dir)?);
+    *voice.recognizer.lock().expect("recognizer lock") = Some(recognizer.clone());
+    Ok(recognizer)
 }
 
 /// Starts the microphone on its own thread (a `cpal` stream can't move between threads) and
@@ -273,84 +297,9 @@ fn start_microphone(app: AppHandle) -> Result<Microphone, String> {
     Ok((stop, thread, samples, rate))
 }
 
-fn quiet(samples: &[f32]) -> bool {
-    samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs())) < SILENCE
-}
-
-fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-}
-
-/// Whether the last half second is much quieter than the speech before it: a breath between
-/// phrases. Relative to how loud this person and this microphone are, so background noise
-/// doesn't hide the pauses.
-fn ends_in_pause(piece: &[f32], rate: u32) -> bool {
-    let tail = rate as usize / 2;
-    if piece.len() < tail * 4 {
-        return false;
-    }
-    let (head, end) = piece.split_at(piece.len() - tail);
-    let loud = rms(head);
-    loud > 0.005 && rms(end) < loud * 0.3
-}
-
-/// Cuts 16 kHz audio into pieces of at most `POLISH_MAX_SECONDS`, each ending at the quietest
-/// moment between `POLISH_TARGET_SECONDS` and that, so words aren't split.
-fn split_at_pauses(audio: &[f32]) -> Vec<std::ops::Range<usize>> {
-    let rate = SAMPLE_RATE as usize;
-    let (target, max, window) = (
-        POLISH_TARGET_SECONDS * rate,
-        POLISH_MAX_SECONDS * rate,
-        rate / 10,
-    );
-    let mut pieces = Vec::new();
-    let mut start = 0;
-    while audio.len() - start > max {
-        let (mut best, mut quietest) = (start + max, f32::MAX);
-        let mut at = start + target;
-        while at + window <= start + max {
-            let level = rms(&audio[at..at + window]);
-            if level < quietest {
-                (quietest, best) = (level, at + window / 2);
-            }
-            at += window / 2;
-        }
-        pieces.push(start..best);
-        start = best;
-    }
-    pieces.push(start..audio.len());
-    pieces
-}
-
-/// What whisper writes for silence and noise, which isn't speech: `[BLANK_AUDIO]`, `(music)`.
-fn without_noises(text: &str) -> String {
-    let mut out = String::new();
-    let mut depth = 0;
-    for c in text.chars() {
-        match c {
-            '[' | '(' => depth += 1,
-            ']' | ')' if depth > 0 => depth -= 1,
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn joined(before: &str, after: &str) -> String {
-    match (before.is_empty(), after.is_empty()) {
-        (true, _) => after.to_string(),
-        (_, true) => before.to_string(),
-        _ => format!("{before} {after}"),
-    }
-}
-
-/// Runs while the person talks: every so often, writes down what's been said since the last
-/// piece was kept and tells the page (`voice-partial`), then does it a last time when told
-/// recording is over.
+/// Runs while the person talks: feeds what the microphone hears to the model and tells the page
+/// the words so far (`voice-partial`) whenever they change, then lets the model finish what it
+/// is holding back once recording is over and returns all the words.
 fn write_down(
     app: AppHandle,
     voice: Arc<Voice>,
@@ -358,72 +307,45 @@ fn write_down(
     rate: u32,
     done: Arc<AtomicBool>,
 ) -> Result<String, String> {
-    // The first time this downloads the model; the microphone keeps listening meanwhile.
-    let model = load_model(&app, &voice, &FAST).inspect_err(|error| {
+    // The first time this downloads the model; the microphone keeps listening meanwhile and the
+    // words catch up (the model runs about twice as fast as speech).
+    let recognizer = load_recognizer(&app, &voice).inspect_err(|error| {
         let _ = app.emit("voice-model-error", error.clone());
     })?;
-    let mut state = {
-        let _alone = voice.engine.lock().expect("engine lock");
-        model
-            .create_state()
-            .map_err(|e| format!("Speech recognition failed: {e}"))?
-    };
-    let (mut kept, mut from) = (String::new(), 0usize);
+    let stream = recognizer.create_stream();
+    let (mut fed, mut shown) = (0usize, String::new());
     loop {
         let finished = done.load(Ordering::SeqCst);
-        let piece: Vec<f32> = samples.lock().expect("samples lock")[from..].to_vec();
-        let seconds = piece.len() as f32 / rate as f32;
-        let enough = seconds >= if finished { MIN_SECONDS } else { 1.0 };
-        let began = std::time::Instant::now();
-        let text = if enough && !quiet(&piece) {
-            let audio = resample(&piece, rate);
-            let spoken = if finished {
-                // Quick: the careful model gets its turn afterwards, in `voice_polish`.
-                let _alone = voice.engine.lock().expect("engine lock");
-                transcribe(&mut state, &audio, true)?
-            } else {
-                // A live pass that fails costs only that update: the next one tries again.
-                let _alone = voice.engine.lock().expect("engine lock");
-                match transcribe(&mut state, &audio, false) {
-                    Ok(text) => text,
-                    Err(error) => {
-                        eprintln!("[voice] live pass failed: {error}");
-                        std::thread::sleep(LIVE_EVERY);
-                        continue;
-                    }
-                }
-            };
-            without_noises(&spoken)
-        } else {
-            String::new()
+        let heard: Vec<f32> = {
+            let all = samples.lock().expect("samples lock");
+            all[fed..].to_vec()
         };
-        eprintln!(
-            "[voice] {} pass: {seconds:.1}s of speech took {} ms",
-            if finished { "final" } else { "live" },
-            began.elapsed().as_millis()
-        );
-        let all = joined(&kept, &text);
+        fed += heard.len();
+        if !heard.is_empty() {
+            stream.accept_waveform(rate as i32, &heard);
+        }
         if finished {
-            let everything = samples.lock().expect("samples lock").clone();
-            *voice.last_audio.lock().expect("audio lock") = Some(resample(&everything, rate));
-            return Ok(all);
+            // The model holds back its last words until it hears a little more.
+            stream.accept_waveform(16_000, &vec![0.0; (16_000.0 * TAIL_SECONDS) as usize]);
+            stream.input_finished();
         }
-        if done.load(Ordering::SeqCst) {
-            continue; // stopped during that pass: go straight to the last one
+        while recognizer.is_ready(&stream) {
+            recognizer.decode(&stream);
         }
-        if enough {
-            let _ = app.emit("voice-partial", &all);
+        let text = recognizer
+            .get_result(&stream)
+            .map(|result| result.text.trim().to_string())
+            .unwrap_or_default();
+        if finished {
+            return Ok(text);
         }
-        // Keep what's written at a pause (a few seconds in) or, failing that, after a long run.
-        let pause = seconds > PAUSE_AFTER_SECONDS && ends_in_pause(&piece, rate);
-        if pause || piece.len() > PIECE_SECONDS * rate as usize {
-            kept = all;
-            from += piece.len();
+        if text != shown {
+            let _ = app.emit("voice-partial", &text);
+            shown = text;
         }
-        // Wait, but notice quickly when recording ends.
         let waited = std::time::Instant::now();
         while waited.elapsed() < LIVE_EVERY && !done.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(30));
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -443,67 +365,6 @@ fn start_recording(app: AppHandle, voice: Arc<Voice>) -> Result<Recording, Strin
     })
 }
 
-/// Linear resampling to 16 kHz: crude, but speech survives it.
-fn resample(mono: &[f32], rate: u32) -> Vec<f32> {
-    if rate == SAMPLE_RATE || mono.is_empty() {
-        return mono.to_vec();
-    }
-    let ratio = rate as f64 / SAMPLE_RATE as f64;
-    let length = (mono.len() as f64 / ratio) as usize;
-    (0..length)
-        .map(|i| {
-            let at = i as f64 * ratio;
-            let (index, fraction) = (at as usize, (at - at.floor()) as f32);
-            let next = mono.get(index + 1).copied().unwrap_or(mono[index]);
-            mono[index] * (1.0 - fraction) + next * fraction
-        })
-        .collect()
-}
-
-/// `careful` (the last pass) tries several readings and keeps the best; the live passes take the
-/// first, to keep up with the speaker.
-fn transcribe(
-    state: &mut whisper_rs::WhisperState,
-    samples: &[f32],
-    careful: bool,
-) -> Result<String, String> {
-    let mut params = FullParams::new(if careful {
-        SamplingStrategy::BeamSearch {
-            beam_size: 3,
-            patience: -1.0,
-        }
-    } else {
-        SamplingStrategy::Greedy { best_of: 1 }
-    });
-    params.set_language(Some("en"));
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_special(false);
-    params.set_print_timestamps(false);
-    params.set_no_context(true);
-    // Whisper reads a fixed 30 seconds however short the speech is, which is what makes it slow.
-    // Look only at about as much as was said (50 steps a second, with some room): 4x faster.
-    let steps = (samples.len() as f32 / SAMPLE_RATE as f32 * 50.0).ceil() as i32 + 150;
-    params.set_audio_ctx(steps.clamp(300, 1500));
-    // Half the cores: the rest keep the window and the microphone responsive.
-    params.set_n_threads(
-        std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 6)) as i32,
-    );
-    // No abort callback: whisper-rs's makes encoding fail at random ("failed to encode").
-    state
-        .full(params, samples)
-        .map_err(|e| format!("Speech recognition failed: {e}"))?;
-    let mut text = String::new();
-    for segment in state.as_iter() {
-        text.push_str(
-            &segment
-                .to_str_lossy()
-                .map_err(|e| format!("Speech recognition failed: {e}"))?,
-        );
-    }
-    Ok(text.trim().to_string())
-}
-
 /// Starts recording. These commands are `async` so that opening the microphone (which can take
 /// a second while the sound system wakes up) never freezes the window.
 #[tauri::command]
@@ -513,8 +374,6 @@ pub async fn voice_start(
 ) -> Result<(), String> {
     let voice = voice.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        voice.polish_cancel.store(true, Ordering::SeqCst);
-        voice.last_audio.lock().expect("audio lock").take();
         let mut slot = voice.recording.lock().expect("recording lock");
         if slot.is_none() {
             *slot = Some(start_recording(app, voice.clone())?);
@@ -525,7 +384,7 @@ pub async fn voice_start(
     .map_err(|e| e.to_string())?
 }
 
-/// Ends the recording; returns `Ok` with whatever the writer produced.
+/// Ends the recording and returns everything that was said.
 fn finish(recording: Recording) -> Result<String, String> {
     recording.done.store(true, Ordering::SeqCst);
     let _ = recording.stop_mic.send(());
@@ -548,82 +407,14 @@ pub async fn voice_stop(voice: tauri::State<'_, Arc<Voice>>) -> Result<String, S
     .map_err(|e| e.to_string())?
 }
 
-/// Goes over the last dictation with the careful model, a piece at a time, and returns the
-/// better text ("" if it was stopped, or there was nothing to do). The page swaps it in only if
-/// the person hasn't edited the words in the meantime.
-#[tauri::command]
-pub async fn voice_polish(
-    app: AppHandle,
-    voice: tauri::State<'_, Arc<Voice>>,
-) -> Result<String, String> {
-    let voice = voice.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(audio) = voice.last_audio.lock().expect("audio lock").take() else {
-            return Ok(String::new());
-        };
-        voice.polish_cancel.store(false, Ordering::SeqCst);
-        let model = load_model(&app, &voice, &ACCURATE)?;
-        let mut state = {
-            let _alone = voice.engine.lock().expect("engine lock");
-            model
-                .create_state()
-                .map_err(|e| format!("Speech recognition failed: {e}"))?
-        };
-        let mut text = String::new();
-        for range in split_at_pauses(&audio) {
-            if voice.polish_cancel.load(Ordering::SeqCst) {
-                return Ok(String::new());
-            }
-            let piece = &audio[range];
-            if quiet(piece) || (piece.len() as f32) < MIN_SECONDS * SAMPLE_RATE as f32 {
-                continue;
-            }
-            let began = std::time::Instant::now();
-            let spoken = {
-                let _alone = voice.engine.lock().expect("engine lock");
-                transcribe(&mut state, piece, false)?
-            };
-            eprintln!(
-                "[voice] polish: {:.1}s took {} ms",
-                piece.len() as f32 / SAMPLE_RATE as f32,
-                began.elapsed().as_millis()
-            );
-            text = joined(&text, &without_noises(&spoken));
-        }
-        Ok(if voice.polish_cancel.load(Ordering::SeqCst) {
-            String::new()
-        } else {
-            text
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Stops a polish that's running (the person is recording again, or saving).
-#[tauri::command]
-pub fn voice_polish_cancel(voice: tauri::State<'_, Arc<Voice>>) {
-    voice.polish_cancel.store(true, Ordering::SeqCst);
-}
-
-/// Temporary: lets the page say what it sees, so the terminal shows it.
-#[tauri::command]
-pub fn voice_log(message: String) {
-    eprintln!("[voice-ui] {message}");
-}
-
 /// Loads the model ahead of time (when the capture window opens), so the first words don't wait
 /// for it. Does nothing if the model hasn't been downloaded: that happens on the first use.
 #[tauri::command]
 pub async fn voice_warm(app: AppHandle, voice: tauri::State<'_, Arc<Voice>>) -> Result<(), String> {
     let voice = voice.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        for spec in [&FAST, &ACCURATE] {
-            // Not while someone is talking: loading holds up the live words.
-            let talking = voice.recording.lock().expect("recording lock").is_some();
-            if model_is_present(spec) && !(talking && spec.file == ACCURATE.file) {
-                let _ = load_model(&app, &voice, spec);
-            }
+        if model_is_present(&model_dir()) {
+            let _ = load_recognizer(&app, &voice);
         }
     })
     .await
@@ -648,71 +439,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resampling_keeps_the_length_in_seconds() {
-        let one_second = vec![0.5f32; 48_000];
-        assert_eq!(resample(&one_second, 48_000).len(), 16_000);
-        assert_eq!(resample(&one_second, 16_000).len(), 48_000);
-        assert!(resample(&[], 44_100).is_empty());
+    fn the_model_files_are_listed_with_sizes() {
+        assert_eq!(MODEL_FILES.len(), 4);
+        assert!(
+            MODEL_FILES
+                .iter()
+                .all(|(name, size)| !name.is_empty() && *size > 0)
+        );
+        assert_eq!(ARCHIVE_SHA256.len(), 64);
+        assert!(ARCHIVE_URL.ends_with(&format!("{MODEL_NAME}.tar.bz2")));
     }
 
     #[test]
-    fn noises_are_not_words() {
-        assert_eq!(without_noises("[BLANK_AUDIO]"), "");
-        assert_eq!(without_noises(" Hello (music) there  [x] "), "Hello there");
-        assert_eq!(joined("one", ""), "one");
-        assert_eq!(joined("one", "two"), "one two");
-    }
-
-    #[test]
-    fn long_audio_is_cut_at_the_quiet_part() {
-        let rate = SAMPLE_RATE as usize;
-        // 25 s of tone with a gap at 8.0 s
-        let mut audio: Vec<f32> = (0..25 * rate)
-            .map(|i| 0.3 * (i as f32 * 0.05).sin())
-            .collect();
-        audio[8 * rate..8 * rate + rate / 5].fill(0.0);
-        let pieces = split_at_pauses(&audio);
-        assert_eq!(pieces.first().unwrap().start, 0);
-        assert_eq!(pieces.last().unwrap().end, audio.len());
-        for pair in pieces.windows(2) {
-            assert_eq!(pair[0].end, pair[1].start);
+    fn unpacking_takes_only_the_model_files_by_name() {
+        let work = tempfile::tempdir().unwrap();
+        let archive = work.path().join("m.tar.bz2");
+        {
+            let encoder = bzip2::write::BzEncoder::new(
+                std::fs::File::create(&archive).unwrap(),
+                bzip2::Compression::fast(),
+            );
+            let mut tar = tar::Builder::new(encoder);
+            for (path, bytes) in [
+                (format!("{MODEL_NAME}/encoder.int8.onnx"), b"e".as_slice()),
+                (format!("{MODEL_NAME}/tokens.txt"), b"t".as_slice()),
+                (format!("{MODEL_NAME}/README.md"), b"readme".as_slice()),
+                (format!("{MODEL_NAME}/test_wavs/0.wav"), b"wav".as_slice()),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, path, bytes).unwrap();
+            }
+            tar.into_inner().unwrap().finish().unwrap();
         }
-        assert!(pieces.iter().all(|p| p.len() <= POLISH_MAX_SECONDS * rate));
-        let cut = pieces[0].end as f32 / rate as f32;
-        assert!((7.9..8.3).contains(&cut), "cut at {cut}");
-        assert_eq!(split_at_pauses(&audio[..3 * rate]).len(), 1);
-    }
-
-    #[test]
-    fn a_pause_is_quiet_compared_with_the_speech() {
-        let rate = 16_000u32;
-        let talking: Vec<f32> = (0..rate * 4)
-            .map(|i| 0.2 * (i as f32 * 0.05).sin())
+        let dir = work.path().join("out");
+        // Not the real sizes, so the final check complains, but the right files are the only
+        // ones taken.
+        assert!(unpack_model(&archive, &dir).is_err());
+        let mut names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        let mut with_pause = talking.clone();
-        let end = with_pause.len();
-        with_pause[end - 8000..].iter_mut().for_each(|s| *s *= 0.05);
-        assert!(ends_in_pause(&with_pause, rate));
-        assert!(!ends_in_pause(&talking, rate));
-        // a noisy room still counts: the floor is lower than the voice
-        let noisy: Vec<f32> = with_pause
-            .iter()
-            .map(|s| s + 0.004 * (*s * 90.0).cos())
-            .collect();
-        assert!(ends_in_pause(&noisy, rate));
+        names.sort();
+        assert_eq!(names, ["encoder.int8.onnx", "tokens.txt"]);
     }
 
+    /// The real thing, end to end: download, check, unpack, load, and hear a recording.
+    /// `FASTMIND_TEST_WAV=/path/to.wav cargo test -p fastmind-desktop -- --ignored --nocapture`
     #[test]
-    fn silence_is_not_sent_to_the_model() {
-        assert!(quiet(&[0.001, -0.002, 0.0]));
-        assert!(!quiet(&[0.001, -0.2]));
-    }
+    #[ignore = "downloads 460 MB"]
+    fn the_real_model_downloads_and_hears_speech() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut last = 0;
+        let dir = ensure_model(folder.path(), |percent| last = percent).unwrap();
+        assert_eq!(last, 100);
+        assert!(model_is_present(&dir));
+        // Already there: no second download.
+        assert_eq!(
+            ensure_model(folder.path(), |_| panic!("downloaded again")).unwrap(),
+            dir
+        );
 
-    #[test]
-    fn resampling_keeps_the_shape_of_a_ramp() {
-        let ramp: Vec<f32> = (0..300).map(|i| i as f32 / 300.0).collect();
-        let out = resample(&ramp, 48_000);
-        assert_eq!(out.len(), 100);
-        assert!(out.windows(2).all(|w| w[1] >= w[0]));
+        let recognizer = create_recognizer(&dir).unwrap();
+        let Ok(path) = std::env::var("FASTMIND_TEST_WAV") else {
+            return;
+        };
+        let wave = sherpa_onnx::Wave::read(&path).expect("a readable wav");
+        let stream = recognizer.create_stream();
+        let began = std::time::Instant::now();
+        for chunk in wave.samples().chunks(wave.sample_rate() as usize / 10) {
+            stream.accept_waveform(wave.sample_rate(), chunk);
+            while recognizer.is_ready(&stream) {
+                recognizer.decode(&stream);
+            }
+        }
+        stream.accept_waveform(16_000, &vec![0.0; (16_000.0 * TAIL_SECONDS) as usize]);
+        stream.input_finished();
+        while recognizer.is_ready(&stream) {
+            recognizer.decode(&stream);
+        }
+        let text = recognizer.get_result(&stream).unwrap().text;
+        eprintln!("HEARD ({:?}): {text}", began.elapsed());
+        assert!(!text.trim().is_empty());
     }
 }

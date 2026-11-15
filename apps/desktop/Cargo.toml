@@ -31,7 +31,9 @@ futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 cpal = "0.15"
 sha2 = "0.10"
-whisper-rs = "0.16"
+sherpa-onnx = "2.0.1"
+bzip2 = "0.6"
+tar = "0.4"
 ureq.workspace = true
 directories.workspace = true
 # Tauri's Linux tray (libappindicator) only shows a menu: a left click never reaches the app.

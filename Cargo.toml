@@ -19,14 +19,6 @@ ureq = { version = "2", features = ["json"] }
 directories = "6"
 tempfile = "3"
 
-# Speech recognition is unusably slow unoptimised (a few seconds of speech took 12 s), so even
-# `cargo run` builds whisper.cpp with optimisations.
-[profile.dev.package.whisper-rs-sys]
-opt-level = 3
-
-[profile.dev.package.whisper-rs]
-opt-level = 3
-
 [profile.release]
 opt-level = 3
 lto = "thin"
