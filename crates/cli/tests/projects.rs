@@ -3,7 +3,7 @@
 
 use serde_json::json;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn fastmind(config: &Path, cwd: &Path) -> Command {
@@ -12,10 +12,22 @@ fn fastmind(config: &Path, cwd: &Path) -> Command {
     command
 }
 
+/// The real path, without Windows' `\\?\` prefix: what FastMind prints for a notebook.
+fn real(path: &Path) -> PathBuf {
+    let path = path.canonicalize().unwrap();
+    match path.to_string_lossy().strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
 #[test]
 fn work_inside_a_project_goes_to_its_notebook() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    // FastMind shows notebooks by their real path. On Windows the temp folder is often a short
+    // 8.3 name (`C:\Users\RUNNER~1\...`), so compare against the real path, as FastMind does.
+    let real_root = real(dir.path());
+    let root = real_root.as_path();
     let usual = root.join("usual");
     let project = root.join("pz-connector-kafka");
     let planning = root.join("pz-planning/pz-connector-kafka/notes");
@@ -63,8 +75,10 @@ fn work_inside_a_project_goes_to_its_notebook() {
         let out = fastmind(&config, cwd).arg("status").output().unwrap();
         String::from_utf8(out.stdout).unwrap()
     };
-    assert!(status(&project).contains(planning.to_str().unwrap()));
-    assert!(status(root).contains(usual.to_str().unwrap()));
+    let shown = status(&project);
+    assert!(shown.contains(planning.to_str().unwrap()), "{shown}");
+    let shown = status(root);
+    assert!(shown.contains(usual.to_str().unwrap()), "{shown}");
 
     let unset = fastmind(&config, &project)
         .args(["project", "unset"])
