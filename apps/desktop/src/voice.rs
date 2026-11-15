@@ -306,11 +306,6 @@ fn write_down(
     let model = load_model(&app, &voice, &FAST).inspect_err(|error| {
         let _ = app.emit("voice-model-error", error.clone());
     })?;
-    // The careful model loads (or downloads) meanwhile, for the last pass.
-    let mut accurate = Some({
-        let (app, voice) = (app.clone(), voice.clone());
-        std::thread::spawn(move || load_model(&app, &voice, &ACCURATE))
-    });
     let mut state = {
         let _alone = voice.engine.lock().expect("engine lock");
         model
@@ -328,28 +323,32 @@ fn write_down(
             let audio = resample(&piece, rate);
             let spoken = if finished {
                 // The last pass uses the careful model, if it loaded; else the quick one.
-                let careful = accurate
-                    .take()
-                    .and_then(|loading| loading.join().ok())
-                    .and_then(|loaded| {
-                        loaded
-                            .inspect_err(|error| {
-                                let _ = app.emit("voice-model-error", error.clone());
-                            })
-                            .ok()
+                // (Already loaded when the window opened, unless this is the very first time.)
+                let careful = load_model(&app, &voice, &ACCURATE)
+                    .inspect_err(|error| {
+                        let _ = app.emit("voice-model-error", error.clone());
                     })
+                    .ok()
                     .and_then(|model| {
                         let _alone = voice.engine.lock().expect("engine lock");
                         model.create_state().ok()
                     });
                 let _alone = voice.engine.lock().expect("engine lock");
                 match careful {
-                    Some(mut careful) => transcribe(&mut careful, &audio, true, None)?,
-                    None => transcribe(&mut state, &audio, true, None)?,
+                    Some(mut careful) => transcribe(&mut careful, &audio, true)?,
+                    None => transcribe(&mut state, &audio, true)?,
                 }
             } else {
                 let _alone = voice.engine.lock().expect("engine lock");
-                transcribe(&mut state, &audio, false, Some(done.clone()))?
+                // A live pass that fails costs only that update: the next one tries again.
+                match transcribe(&mut state, &audio, false) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        eprintln!("[voice] live pass failed: {error}");
+                        std::thread::sleep(LIVE_EVERY);
+                        continue;
+                    }
+                }
             };
             without_noises(&spoken)
         } else {
@@ -419,14 +418,10 @@ fn resample(mono: &[f32], rate: u32) -> Vec<f32> {
 
 /// `careful` (the last pass) tries several readings and keeps the best; the live passes take the
 /// first, to keep up with the speaker.
-///
-/// If `stop` gets set while it works, a live pass gives up at once and returns nothing, so the
-/// last pass doesn't wait behind it.
 fn transcribe(
     state: &mut whisper_rs::WhisperState,
     samples: &[f32],
     careful: bool,
-    stop: Option<Arc<AtomicBool>>,
 ) -> Result<String, String> {
     let mut params = FullParams::new(if careful {
         SamplingStrategy::BeamSearch {
@@ -450,15 +445,10 @@ fn transcribe(
     params.set_n_threads(
         std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 6)) as i32,
     );
-    if let Some(stop) = stop.clone() {
-        params.set_abort_callback_safe::<_, _>(move || stop.load(Ordering::SeqCst));
-    }
-    if let Err(error) = state.full(params, samples) {
-        if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
-            return Ok(String::new());
-        }
-        return Err(format!("Speech recognition failed: {error}"));
-    }
+    // No abort callback: whisper-rs's makes encoding fail at random ("failed to encode").
+    state
+        .full(params, samples)
+        .map_err(|e| format!("Speech recognition failed: {e}"))?;
     let mut text = String::new();
     for segment in state.as_iter() {
         text.push_str(
@@ -525,7 +515,9 @@ pub async fn voice_warm(app: AppHandle, voice: tauri::State<'_, Arc<Voice>>) -> 
     let voice = voice.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         for spec in [&FAST, &ACCURATE] {
-            if model_is_present(spec) {
+            // Not while someone is talking: loading holds up the live words.
+            let talking = voice.recording.lock().expect("recording lock").is_some();
+            if model_is_present(spec) && !(talking && spec.file == ACCURATE.file) {
                 let _ = load_model(&app, &voice, spec);
             }
         }
