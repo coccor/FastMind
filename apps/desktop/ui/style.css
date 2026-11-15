@@ -350,3 +350,22 @@ legend { font-weight: 650; padding: 0 6px; }
 .write-failed { color: var(--warn, #b60); margin: 4px 0; }
 .original { border-left: 3px solid var(--line); padding: 6px 10px; margin: 8px 0; background: var(--panel, transparent); }
 .original pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0; font: inherit; }
+
+/* The microphone next to Save: red and pulsing while it listens, faded while it writes the words down. */
+.mic { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border, currentColor); background: transparent; color: var(--muted); padding: 5px 9px; border-radius: 8px; cursor: pointer; }
+.mic:hover { color: var(--text); }
+.mic.listening { color: #fff; background: #d33; border-color: #d33; animation: mic-pulse 1.2s ease-in-out infinite; }
+.mic.working { opacity: .5; cursor: progress; }
+@keyframes mic-pulse { 50% { box-shadow: 0 0 0 5px rgba(221, 51, 51, .25); } }
+@media (prefers-reduced-motion: reduce) { .mic.listening { animation: none; } }
+
+/* The bar that moves with your voice while the microphone listens. */
+.meter { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--border, rgba(128,128,128,.3)); overflow: hidden; vertical-align: middle; margin-right: 6px; }
+.meter i { display: block; height: 100%; background: #d33; transform-origin: left; transform: scaleX(0); transition: transform 60ms linear; }
+@media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
+
+/* What the microphone is doing, in words: Listening, Finishing…, Polishing…. */
+.voice-status { font-size: 12px; color: var(--muted); margin-right: 8px; white-space: nowrap; }
+.voice-status:not([hidden])::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: middle; animation: status-pulse 1s ease-in-out infinite; }
+@keyframes status-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .voice-status:not([hidden])::before { animation: none; } }

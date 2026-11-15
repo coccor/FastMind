@@ -23,6 +23,14 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 opener = "0.7"
+# Voice capture: the microphone, and the speech model (downloaded once, checked, unpacked).
+cpal = "0.15"
+sha2 = "0.10"
+sherpa-onnx = "2.0.1"
+bzip2 = "0.6"
+tar = "0.4"
+ureq.workspace = true
+directories.workspace = true
 
 # Global hotkeys under Wayland go through the desktop's shortcuts service (the XDG portal).
 [target.'cfg(target_os = "linux")'.dependencies]

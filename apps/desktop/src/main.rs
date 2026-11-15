@@ -21,6 +21,8 @@ mod hyprland;
 #[cfg(target_os = "linux")]
 mod wayland_keys;
 
+mod voice;
+
 struct Core(Arc<App>);
 
 /// How the hotkeys are wired, for Settings: grabbed by FastMind ("native"), asked of the
@@ -460,13 +462,18 @@ fn main() {
         .manage(Core(core))
         .manage(Keys::default())
         .manage(HotkeyStatus::default())
+        .manage(Arc::new(voice::Voice::default()))
         .invoke_handler(tauri::generate_handler![
             call,
             hotkey_status,
             hotkeys_configure,
             open_path,
             hide_capture,
-            pick_folder
+            pick_folder,
+            voice::voice_start,
+            voice::voice_stop,
+            voice::voice_cancel,
+            voice::voice_warm
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

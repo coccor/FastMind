@@ -305,6 +305,7 @@ const clearHomeDraft = keepDraft($("#home-capture-text"), "fastmind.draft.home")
 $("#home-capture").addEventListener("submit", async (event) => {
   event.preventDefault();
   const area = $("#home-capture-text");
+  await homeVoice.finish();
   if (await saveCapture(area.value, homeFiles.files)) { area.value = ""; homeFiles.clear(); clearHomeDraft(); loadHome(); }
 });
 $("#home-capture-text").addEventListener("keydown", (event) => {
@@ -1210,6 +1211,168 @@ $("#make-demo").addEventListener("click", async () => {
 const MAX_FILE = 50 * 1024 * 1024;
 
 // A capture box that takes pasted screenshots and dropped files, shown as chips under it.
+// A microphone button: click it, or hold Space, and talk. The words appear in the box as you
+// speak, with a bar that moves with your voice; let go (or click again) to finish. The recording
+// and the speech-to-text both happen in the app, on this computer.
+function voiceButton(button, area) {
+  if (!tauri || !button) return { cancel() {}, finish: async () => {} };
+  button.hidden = false;
+  const meter = document.createElement("span");
+  meter.className = "meter";
+  meter.hidden = true;
+  meter.innerHTML = "<i></i>";
+  button.before(meter);
+  const bar = meter.firstChild;
+  // What the app is doing, always in view: "Listening", "Finishing…", "Polishing…".
+  const status = document.createElement("span");
+  status.className = "voice-status";
+  status.hidden = true;
+  button.before(status);
+  const say = (text) => { status.hidden = !text; status.textContent = text; };
+  // idle -> starting -> listening -> working (the model finishing the last words) -> idle
+  let state = "idle";
+  let held = false;       // started by holding Space: letting go ends it
+  let released = false;   // let go before the microphone was ready
+  let anchor = null;      // the text around the spot where the words go
+  let before = null;      // the box as it was when Space went down
+
+  const set = (next) => {
+    state = next;
+    button.classList.toggle("listening", next === "listening");
+    button.classList.toggle("working", next === "working" || next === "starting");
+    meter.hidden = next !== "listening";
+    area.readOnly = next === "listening" || next === "working";
+    if (next !== "listening") bar.style.transform = "scaleX(0)";
+    const words = { starting: "Starting…", listening: "Listening", working: "Finishing…" }[next] || "";
+    if (next !== "idle") say(words);
+    else say("");
+  };
+  const render = (text) => {
+    const gap = text && anchor.before && !/\s$/.test(anchor.before) ? " " : "";
+    const value = anchor.before + gap + text;
+    area.value = value + anchor.after;
+    area.selectionStart = area.selectionEnd = value.length;
+    area.scrollTop = area.scrollHeight;
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const restore = () => { if (anchor) render(""); };
+
+  const start = async () => {
+    if (state !== "idle") return;
+    set("starting");
+    released = false;
+    const at = area.selectionEnd ?? area.value.length;
+    anchor = { before: area.value.slice(0, at), after: area.value.slice(at) };
+    try {
+      await tauri.core.invoke("voice_start");
+    } catch (error) {
+      set("idle"); held = false;
+      toast(String(error), true);
+      return;
+    }
+    set("listening");
+    if (released) stop();
+  };
+  const stop = async () => {
+    if (state === "starting") { released = true; return; }
+    if (state !== "listening") return;
+    set("working");
+    held = false;
+    try {
+      const text = await tauri.core.invoke("voice_stop");
+      if (text) { render(text + (anchor.after && /^\s/.test(anchor.after) ? "" : " ")); } else { restore(); toast("Didn't catch anything."); }
+    } catch (error) {
+      restore();
+      toast(String(error), true);
+    }
+    set("idle");
+    area.focus();
+  };
+  const cancel = () => {
+    if (state !== "listening" && state !== "starting") return;
+    tauri.core.invoke("voice_cancel").catch(() => {});
+    restore();
+    set("idle"); held = false;
+  };
+
+  button.addEventListener("click", () => { if (state === "idle") start(); else stop(); });
+
+  // Hold Space: the first press types a space as usual. If the key is still down a moment
+  // later, the space (and any repeats of it) is taken back and the recording begins. This
+  // doesn't depend on `event.repeat`, which the Linux webview doesn't set.
+  const HOLD_MS = 280;
+  let holdTimer = null;
+  let spaceDown = false;
+  let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
+  const arm = () => {
+    quietUntil = Date.now() + 250;
+    tauri.core.invoke("voice_warm").catch(() => {});   // load the model while the hand finds Space
+  };
+  area.addEventListener("focus", arm);
+  if (tauri) tauri.event.listen("capture-shown", arm);
+  const trigger = () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (!spaceDown || !before || state !== "idle") return;
+    area.value = before.value;   // take back the spaces the hold typed
+    area.selectionStart = before.start;
+    area.selectionEnd = before.end;
+    held = true;
+    start();
+  };
+  const disarm = () => { clearTimeout(holdTimer); holdTimer = null; spaceDown = false; };
+  const isSpace = (event) => event.code === "Space" || event.key === " ";
+  let releaseTimer = null;
+  area.addEventListener("keydown", (event) => {
+    if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Some systems report a held key as release + press, again and again: a release followed
+    // at once by another press is the same hold.
+    clearTimeout(releaseTimer);
+    if (state !== "idle") { event.preventDefault(); return; }
+    if (spaceDown) {   // a second Space with no letting go between: the key is held
+      event.preventDefault();
+      trigger();
+      return;
+    }
+    spaceDown = true;
+    if (Date.now() < quietUntil) { before = null; return; }
+    before = { value: area.value, start: area.selectionStart, end: area.selectionEnd };
+    holdTimer = setTimeout(trigger, HOLD_MS);   // in case the key doesn't repeat
+  });
+  area.addEventListener("keyup", (event) => {
+    if (!isSpace(event)) return;
+    event.preventDefault();
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => {
+      const wasHeld = held;
+      disarm();
+      if (wasHeld) stop();
+    }, 200);
+  });
+  area.addEventListener("blur", () => { disarm(); if (held) stop(); });
+
+  tauri.event.listen("voice-level", (event) => {
+    if (state === "listening") bar.style.transform = `scaleX(${Math.max(0.04, Number(event.payload))})`;
+  });
+  tauri.event.listen("voice-partial", (event) => {
+    if (state === "listening" && event.payload) render(String(event.payload));
+  });
+  // Ctrl+Enter while still talking: let the last words land before saving.
+  const finish = async () => {
+    while (state === "starting" || state === "working") await new Promise((r) => setTimeout(r, 30));
+    if (state === "listening") await stop();
+  };
+  return { cancel, finish };
+}
+// The first-time download shows in the status label of whichever microphone is in use.
+tauri?.event.listen("voice-model-progress", (event) => {
+  document.querySelectorAll(".voice-status").forEach((label) => {
+    if (label.hidden) return;
+    label.textContent = event.payload < 100 ? `Downloading the speech model… ${event.payload}%` : label.textContent;
+  });
+});
+tauri?.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
+
 function attachable(area, chips) {
   const files = [];
   const render = () => {
@@ -1250,7 +1413,13 @@ function attachable(area, chips) {
 
 // What you typed in a capture box survives closing it: Esc keeps a draft for next time.
 function keepDraft(area, key) {
-  try { area.value = localStorage.getItem(key) || area.value; } catch {}
+  // Speech-to-text once saved "[BLANK_AUDIO]" as a draft: never bring those back.
+  const clean = (text) => text.replace(/\[BLANK[ _]AUDIO\]/gi, "");
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved !== null && !clean(saved).trim()) localStorage.removeItem(key);
+    else if (saved) area.value = clean(saved);
+  } catch {}
   area.addEventListener("input", () => { try { localStorage.setItem(key, area.value); } catch {} });
   return () => { try { localStorage.removeItem(key); } catch {} };
 }
@@ -1272,6 +1441,9 @@ async function saveCapture(text, files = []) {
 }
 
 const dialogFiles = attachable($("#capture-text"), $("#capture-files"));
+const dialogVoice = voiceButton($("#capture-mic"), $("#capture-text"));
+const homeVoice = voiceButton($("#home-mic"), $("#home-capture-text"));
+$("#capture-dialog").addEventListener("close", () => dialogVoice.cancel());
 const clearDialogDraft = keepDraft($("#capture-text"), "fastmind.draft.dialog");
 
 function openCapture() {
@@ -1283,6 +1455,7 @@ $("#capture-open").addEventListener("click", openCapture);
 $("#capture-cancel").addEventListener("click", () => $("#capture-dialog").close());
 $("#capture-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  await dialogVoice.finish();
   if (await saveCapture($("#capture-text").value, dialogFiles.files)) {
     $("#capture-text").value = "";
     dialogFiles.clear();
@@ -1351,11 +1524,13 @@ function startCaptureOnly() {
   const area = $("#capture-text-mini");
   const files = attachable(area, $("#capture-files-mini"));
   const clearDraft = keepDraft(area, "fastmind.draft.window");
-  const close = () => (tauri ? tauri.core.invoke("hide_capture") : window.close());
+  const voice = voiceButton($("#capture-mic-mini"), area);
+  const close = () => { voice.cancel(); return tauri ? tauri.core.invoke("hide_capture") : window.close(); };
   $("#capture-close-mini").addEventListener("click", () => close());
   area.focus();
   $("#capture-form-mini").addEventListener("submit", async (event) => {
     event.preventDefault();
+    await voice.finish();
     if (await saveCapture(area.value, files.files)) {
       area.value = "";
       files.clear();

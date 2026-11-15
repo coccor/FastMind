@@ -19,6 +19,13 @@ One hotkey (**Ctrl+Alt+Space**, **Cmd+Option+Space** on macOS) opens a small box
 you're doing. Type, paste a screenshot or drop a file, press **Ctrl+Enter**, and you're back.
 A link gets its page's title and description. **Esc** keeps a draft for next time. `#tags` work.
 
+**Speak instead of typing:** open the box, hold **Space** and talk. The words appear as you
+speak, with punctuation and capitals, and a bar moves with your voice; let go, fix anything, and
+press **Ctrl+Enter** (which also waits for your last words). The microphone beside Save works
+too. Speech is turned into text on your computer by NVIDIA's Nemotron streaming model (English)
+running through sherpa-onnx; audio is never sent anywhere. The first time, FastMind downloads the
+model (about 460 MB, checked against a pinned SHA-256) to its data folder.
+
 From a terminal or a script: `fastmind capture "…" --tag perf --attach ./ledger.log`.
 
 ## Captures become finished notes
