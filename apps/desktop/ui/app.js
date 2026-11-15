@@ -1271,7 +1271,7 @@ function voiceButton(button, area) {
     held = false;
     try {
       const text = await tauri.core.invoke("voice_stop");
-      if (text) render(text); else { restore(); toast("Didn't catch anything."); }
+      if (text) { render(text + (anchor.after && /^\s/.test(anchor.after) ? "" : " ")); } else { restore(); toast("Didn't catch anything."); }
     } catch (error) {
       restore();
       toast(String(error), true);
@@ -1292,6 +1292,7 @@ function voiceButton(button, area) {
   // later, the space (and any repeats of it) is taken back and the recording begins. This
   // doesn't depend on `event.repeat`, which the Linux webview doesn't set.
   const HOLD_MS = 280;
+  const dbg = (message) => tauri.core.invoke("voice_log", { message }).catch(() => {});   // TEMP
   let holdTimer = null;
   let spaceDown = false;
   let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
@@ -1306,11 +1307,18 @@ function voiceButton(button, area) {
     area.selectionStart = before.start;
     area.selectionEnd = before.end;
     held = true;
+    dbg("hold detected: starting");
     start();
   };
   const disarm = () => { clearTimeout(holdTimer); holdTimer = null; spaceDown = false; };
+  const isSpace = (event) => event.code === "Space" || event.key === " ";
+  let releaseTimer = null;
   area.addEventListener("keydown", (event) => {
-    if (event.code !== "Space" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (isSpace(event)) dbg(`keydown repeat=${event.repeat} state=${state} down=${spaceDown} mods=${+event.ctrlKey}${+event.altKey}${+event.metaKey}`);
+    if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Some systems report a held key as release + press, again and again: a release followed
+    // at once by another press is the same hold.
+    clearTimeout(releaseTimer);
     if (state !== "idle") { event.preventDefault(); return; }
     if (spaceDown) {   // a second Space with no letting go between: the key is held
       event.preventDefault();
@@ -1323,10 +1331,15 @@ function voiceButton(button, area) {
     holdTimer = setTimeout(trigger, HOLD_MS);   // in case the key doesn't repeat
   });
   area.addEventListener("keyup", (event) => {
-    if (event.code !== "Space") return;
-    const wasHeld = held;
-    disarm();
-    if (wasHeld) { event.preventDefault(); stop(); }
+    if (!isSpace(event)) return;
+    dbg(`keyup state=${state} held=${held} down=${spaceDown}`);
+    event.preventDefault();
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => {
+      const wasHeld = held;
+      disarm();
+      if (wasHeld) stop();
+    }, 60);
   });
   area.addEventListener("blur", () => { disarm(); if (held) stop(); });
 

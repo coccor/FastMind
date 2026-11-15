@@ -472,7 +472,8 @@ fn main() {
             pick_folder,
             voice::voice_start,
             voice::voice_stop,
-            voice::voice_cancel
+            voice::voice_cancel,
+            voice::voice_log
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

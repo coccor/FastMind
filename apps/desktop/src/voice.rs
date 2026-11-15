@@ -419,6 +419,12 @@ pub async fn voice_stop(voice: tauri::State<'_, Arc<Voice>>) -> Result<String, S
     .map_err(|e| e.to_string())?
 }
 
+/// Temporary: lets the page say what it sees, so the terminal shows it.
+#[tauri::command]
+pub fn voice_log(message: String) {
+    eprintln!("[voice-ui] {message}");
+}
+
 /// Stops recording and throws it away (the window was closed mid-sentence).
 #[tauri::command]
 pub async fn voice_cancel(voice: tauri::State<'_, Arc<Voice>>) -> Result<(), String> {
