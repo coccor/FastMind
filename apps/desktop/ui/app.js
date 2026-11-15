@@ -1287,28 +1287,40 @@ function voiceButton(button, area) {
 
   button.addEventListener("click", () => { if (state === "idle") start(); else stop(); });
 
-  // Hold Space: the first press types a space as usual; if the key is still down when it starts
-  // repeating, that space is taken back and the recording begins.
+  // Hold Space: the first press types a space as usual. If the key is still down a moment
+  // later, the space (and any repeats of it) is taken back and the recording begins. This
+  // doesn't depend on `event.repeat`, which the Linux webview doesn't set.
+  const HOLD_MS = 280;
+  let holdTimer = null;
+  let spaceDown = false;
+  let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
+  const arm = () => { quietUntil = Date.now() + 800; };
+  area.addEventListener("focus", arm);
+  if (tauri) tauri.event.listen("capture-shown", arm);
+  const disarm = () => { clearTimeout(holdTimer); holdTimer = null; spaceDown = false; };
   area.addEventListener("keydown", (event) => {
     if (event.code !== "Space" || event.ctrlKey || event.metaKey || event.altKey) return;
     if (state !== "idle") { event.preventDefault(); return; }
-    if (!event.repeat) {
-      before = { value: area.value, start: area.selectionStart, end: area.selectionEnd };
-      return;
-    }
-    event.preventDefault();
-    if (before && area.value !== before.value) {
+    if (spaceDown || Date.now() < quietUntil) return;   // a repeat of a press already being timed
+    spaceDown = true;
+    before = { value: area.value, start: area.selectionStart, end: area.selectionEnd };
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      if (!spaceDown || state !== "idle") return;
       area.value = before.value;
       area.selectionStart = before.start;
       area.selectionEnd = before.end;
-    }
-    held = true;
-    start();
+      held = true;
+      start();
+    }, HOLD_MS);
   });
   area.addEventListener("keyup", (event) => {
-    if (event.code === "Space" && held) { event.preventDefault(); stop(); }
+    if (event.code !== "Space") return;
+    const wasHeld = held;
+    disarm();
+    if (wasHeld) { event.preventDefault(); stop(); }
   });
-  area.addEventListener("blur", () => { if (held) stop(); });
+  area.addEventListener("blur", () => { disarm(); if (held) stop(); });
 
   tauri.event.listen("voice-level", (event) => {
     if (state === "listening") bar.style.transform = `scaleX(${Math.max(0.04, Number(event.payload))})`;
@@ -1361,7 +1373,13 @@ function attachable(area, chips) {
 
 // What you typed in a capture box survives closing it: Esc keeps a draft for next time.
 function keepDraft(area, key) {
-  try { area.value = localStorage.getItem(key) || area.value; } catch {}
+  // Speech-to-text once saved "[BLANK_AUDIO]" as a draft: never bring those back.
+  const clean = (text) => text.replace(/\[BLANK[ _]AUDIO\]/gi, "");
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved !== null && !clean(saved).trim()) localStorage.removeItem(key);
+    else if (saved) area.value = clean(saved);
+  } catch {}
   area.addEventListener("input", () => { try { localStorage.setItem(key, area.value); } catch {} });
   return () => { try { localStorage.removeItem(key); } catch {} };
 }
