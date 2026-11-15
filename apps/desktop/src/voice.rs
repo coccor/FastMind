@@ -72,6 +72,9 @@ pub struct Voice {
     fast: Mutex<Option<Arc<WhisperContext>>>,
     accurate: Mutex<Option<Arc<WhisperContext>>>,
     download: Mutex<()>,
+    /// Whisper must not set up a model while another is working (a pass in flight fails with
+    /// "failed to encode"): loading and every pass take turns on this.
+    engine: Mutex<()>,
 }
 
 fn model_path(spec: &ModelSpec) -> PathBuf {
@@ -155,11 +158,14 @@ fn load_model(
         return Ok(model);
     }
     let path = ensure_model(app, voice, spec)?;
-    let context = WhisperContext::new_with_params(
-        path.to_str().ok_or("The model path isn't valid text")?,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| format!("Couldn't load the speech model: {e}"))?;
+    let context = {
+        let _alone = voice.engine.lock().expect("engine lock");
+        WhisperContext::new_with_params(
+            path.to_str().ok_or("The model path isn't valid text")?,
+            WhisperContextParameters::default(),
+        )
+        .map_err(|e| format!("Couldn't load the speech model: {e}"))?
+    };
     let context = Arc::new(context);
     *slot.lock().expect("model lock") = Some(context.clone());
     Ok(context)
@@ -305,9 +311,12 @@ fn write_down(
         let (app, voice) = (app.clone(), voice.clone());
         std::thread::spawn(move || load_model(&app, &voice, &ACCURATE))
     });
-    let mut state = model
-        .create_state()
-        .map_err(|e| format!("Speech recognition failed: {e}"))?;
+    let mut state = {
+        let _alone = voice.engine.lock().expect("engine lock");
+        model
+            .create_state()
+            .map_err(|e| format!("Speech recognition failed: {e}"))?
+    };
     let (mut kept, mut from) = (String::new(), 0usize);
     loop {
         let finished = done.load(Ordering::SeqCst);
@@ -329,12 +338,17 @@ fn write_down(
                             })
                             .ok()
                     })
-                    .and_then(|model| model.create_state().ok());
+                    .and_then(|model| {
+                        let _alone = voice.engine.lock().expect("engine lock");
+                        model.create_state().ok()
+                    });
+                let _alone = voice.engine.lock().expect("engine lock");
                 match careful {
                     Some(mut careful) => transcribe(&mut careful, &audio, true, None)?,
                     None => transcribe(&mut state, &audio, true, None)?,
                 }
             } else {
+                let _alone = voice.engine.lock().expect("engine lock");
                 transcribe(&mut state, &audio, false, Some(done.clone()))?
             };
             without_noises(&spoken)
