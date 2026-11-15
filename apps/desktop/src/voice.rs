@@ -381,7 +381,10 @@ fn transcribe(
     params.set_print_special(false);
     params.set_print_timestamps(false);
     params.set_no_context(true);
-    params.set_n_threads(std::thread::available_parallelism().map_or(4, |n| n.get().min(8)) as i32);
+    // Half the cores: the rest keep the window and the microphone responsive.
+    params.set_n_threads(
+        std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 6)) as i32,
+    );
     if let Some(stop) = stop.clone() {
         params.set_abort_callback_safe::<_, _>(move || stop.load(Ordering::SeqCst));
     }
