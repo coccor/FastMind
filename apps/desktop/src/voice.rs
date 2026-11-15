@@ -67,16 +67,11 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Whether the file at `path` is exactly the pinned model.
-fn model_is_intact(path: &std::path::Path) -> bool {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    if file.metadata().map_or(true, |m| m.len() != MODEL_SIZE) {
-        return false;
-    }
-    let mut hash = Sha256::new();
-    std::io::copy(&mut file, &mut hash).is_ok() && hex(&hash.finalize()) == MODEL_SHA256
+/// Whether the model is on disk at the right size. The file only gets its name after the whole
+/// download matched the pinned SHA-256 (see `ensure_model`), so the size is enough to notice a
+/// cut-short or swapped file without re-reading 490 MB on every start.
+fn model_is_present(path: &std::path::Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == MODEL_SIZE)
 }
 
 /// Downloads the model the first time, telling the UI how far along it is.
@@ -84,7 +79,7 @@ fn ensure_model(app: &AppHandle, voice: &Voice) -> Result<PathBuf, String> {
     let path = model_path();
     let _one_at_a_time = voice.download.lock().expect("download lock");
     if path.exists() {
-        if model_is_intact(&path) {
+        if model_is_present(&path) {
             return Ok(path);
         }
         // Damaged or replaced: fetch it again rather than load it.
@@ -453,6 +448,20 @@ pub async fn voice_stop(voice: tauri::State<'_, Arc<Voice>>) -> Result<String, S
 #[tauri::command]
 pub fn voice_log(message: String) {
     eprintln!("[voice-ui] {message}");
+}
+
+/// Loads the model ahead of time (when the capture window opens), so the first words don't wait
+/// for it. Does nothing if the model hasn't been downloaded: that happens on the first use.
+#[tauri::command]
+pub async fn voice_warm(app: AppHandle, voice: tauri::State<'_, Arc<Voice>>) -> Result<(), String> {
+    let voice = voice.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if model_is_present(&model_path()) {
+            let _ = load_model(&app, &voice);
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Stops recording and throws it away (the window was closed mid-sentence).

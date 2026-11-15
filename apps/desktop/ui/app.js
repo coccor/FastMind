@@ -1296,7 +1296,10 @@ function voiceButton(button, area) {
   let holdTimer = null;
   let spaceDown = false;
   let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
-  const arm = () => { quietUntil = Date.now() + 250; };
+  const arm = () => {
+    quietUntil = Date.now() + 250;
+    tauri.core.invoke("voice_warm").catch(() => {});   // load the model while the hand finds Space
+  };
   area.addEventListener("focus", arm);
   if (tauri) tauri.event.listen("capture-shown", arm);
   const trigger = () => {
