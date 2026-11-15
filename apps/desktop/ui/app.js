@@ -1339,7 +1339,7 @@ function voiceButton(button, area) {
       const wasHeld = held;
       disarm();
       if (wasHeld) stop();
-    }, 60);
+    }, 200);
   });
   area.addEventListener("blur", () => { disarm(); if (held) stop(); });
 

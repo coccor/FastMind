@@ -36,6 +36,8 @@ const LIVE_EVERY: Duration = Duration::from_millis(700);
 /// After this much speech in one piece, what's been written is kept and a new piece begins, so a
 /// long dictation doesn't get slower and slower.
 const PIECE_SECONDS: usize = 20;
+/// ...or, better, at a pause once there's this much.
+const PAUSE_AFTER_SECONDS: f32 = 6.0;
 /// Quieter than this is silence: no point asking the model, which makes up words for noise.
 const SILENCE: f32 = 0.01;
 
@@ -285,19 +287,37 @@ fn write_down(
         let piece: Vec<f32> = samples.lock().expect("samples lock")[from..].to_vec();
         let seconds = piece.len() as f32 / rate as f32;
         let enough = seconds >= if finished { MIN_SECONDS } else { 1.0 };
+        let began = std::time::Instant::now();
         let text = if enough && !quiet(&piece) {
-            without_noises(&transcribe(&mut state, &resample(&piece, rate), finished)?)
+            let stop = (!finished).then(|| done.clone());
+            without_noises(&transcribe(
+                &mut state,
+                &resample(&piece, rate),
+                finished,
+                stop,
+            )?)
         } else {
             String::new()
         };
+        eprintln!(
+            "[voice] {} pass: {seconds:.1}s of speech took {} ms",
+            if finished { "final" } else { "live" },
+            began.elapsed().as_millis()
+        );
         let all = joined(&kept, &text);
         if finished {
             return Ok(all);
         }
+        if done.load(Ordering::SeqCst) {
+            continue; // stopped during that pass: go straight to the last one
+        }
         if enough {
             let _ = app.emit("voice-partial", &all);
         }
-        if piece.len() > PIECE_SECONDS * rate as usize {
+        // Keep what's written at a pause (a few seconds in) or, failing that, after a long run.
+        let pause = seconds > PAUSE_AFTER_SECONDS
+            && quiet(&piece[piece.len().saturating_sub(rate as usize / 2)..]);
+        if pause || piece.len() > PIECE_SECONDS * rate as usize {
             kept = all;
             from += piece.len();
         }
@@ -343,14 +363,18 @@ fn resample(mono: &[f32], rate: u32) -> Vec<f32> {
 
 /// `careful` (the last pass) tries several readings and keeps the best; the live passes take the
 /// first, to keep up with the speaker.
+///
+/// If `stop` gets set while it works, a live pass gives up at once and returns nothing, so the
+/// last pass doesn't wait behind it.
 fn transcribe(
     state: &mut whisper_rs::WhisperState,
     samples: &[f32],
     careful: bool,
+    stop: Option<Arc<AtomicBool>>,
 ) -> Result<String, String> {
     let mut params = FullParams::new(if careful {
         SamplingStrategy::BeamSearch {
-            beam_size: 5,
+            beam_size: 3,
             patience: -1.0,
         }
     } else {
@@ -363,9 +387,15 @@ fn transcribe(
     params.set_print_timestamps(false);
     params.set_no_context(true);
     params.set_n_threads(std::thread::available_parallelism().map_or(4, |n| n.get().min(8)) as i32);
-    state
-        .full(params, samples)
-        .map_err(|e| format!("Speech recognition failed: {e}"))?;
+    if let Some(stop) = stop.clone() {
+        params.set_abort_callback_safe::<_, _>(move || stop.load(Ordering::SeqCst));
+    }
+    if let Err(error) = state.full(params, samples) {
+        if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+            return Ok(String::new());
+        }
+        return Err(format!("Speech recognition failed: {error}"));
+    }
     let mut text = String::new();
     for segment in state.as_iter() {
         text.push_str(
