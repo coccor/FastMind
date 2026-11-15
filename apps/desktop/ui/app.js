@@ -1210,42 +1210,116 @@ $("#make-demo").addEventListener("click", async () => {
 const MAX_FILE = 50 * 1024 * 1024;
 
 // A capture box that takes pasted screenshots and dropped files, shown as chips under it.
-// A microphone button: click to start, click again to stop, and the words land in the box.
-// The recording and the speech-to-text both happen in the app, on this computer.
+// A microphone button: click it, or hold Space, and talk. The words appear in the box as you
+// speak, with a bar that moves with your voice; let go (or click again) to finish. The recording
+// and the speech-to-text both happen in the app, on this computer.
 function voiceButton(button, area) {
   if (!tauri || !button) return { cancel() {} };
   button.hidden = false;
+  const meter = document.createElement("span");
+  meter.className = "meter";
+  meter.hidden = true;
+  meter.innerHTML = "<i></i>";
+  button.before(meter);
+  const bar = meter.firstChild;
+  // idle -> starting -> listening -> working -> idle
   let state = "idle";
-  const insert = (text) => {
-    const at = area.selectionEnd ?? area.value.length;
-    const before = area.value.slice(0, at), after = area.value.slice(at);
-    const joined = (before && !/\s$/.test(before) ? " " : "") + text;
-    area.value = before + joined + after;
-    area.selectionStart = area.selectionEnd = before.length + joined.length;
-    area.dispatchEvent(new Event("input", { bubbles: true }));
-    area.focus();
+  let held = false;       // started by holding Space: letting go ends it
+  let released = false;   // let go before the microphone was ready
+  let anchor = null;      // the text around the spot where the words go
+  let before = null;      // the box as it was when Space went down
+
+  const set = (next) => {
+    state = next;
+    button.classList.toggle("listening", next === "listening");
+    button.classList.toggle("working", next === "working" || next === "starting");
+    meter.hidden = next !== "listening";
+    area.readOnly = next === "listening" || next === "working";
+    if (next !== "listening") bar.style.transform = "scaleX(0)";
   };
-  const set = (next) => { state = next; button.classList.toggle("listening", next === "listening"); button.classList.toggle("working", next === "working"); };
-  button.addEventListener("click", async () => {
-    if (state === "working") return;
-    if (state === "idle") {
-      try { await tauri.core.invoke("voice_start"); set("listening"); } catch (error) { toast(String(error), true); }
+  const render = (text) => {
+    const gap = text && anchor.before && !/\s$/.test(anchor.before) ? " " : "";
+    const value = anchor.before + gap + text;
+    area.value = value + anchor.after;
+    area.selectionStart = area.selectionEnd = value.length;
+    area.scrollTop = area.scrollHeight;
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const restore = () => { if (anchor) render(""); };
+
+  const start = async () => {
+    if (state !== "idle") return;
+    set("starting");
+    released = false;
+    const at = area.selectionEnd ?? area.value.length;
+    anchor = { before: area.value.slice(0, at), after: area.value.slice(at) };
+    try {
+      await tauri.core.invoke("voice_start");
+    } catch (error) {
+      set("idle"); held = false;
+      toast(String(error), true);
       return;
     }
+    set("listening");
+    if (released) stop();
+  };
+  const stop = async () => {
+    if (state === "starting") { released = true; return; }
+    if (state !== "listening") return;
     set("working");
+    held = false;
     try {
       const text = await tauri.core.invoke("voice_stop");
-      if (text) insert(text); else toast("Didn't catch anything.");
-    } catch (error) { toast(String(error), true); }
+      if (text) render(text); else { restore(); toast("Didn't catch anything."); }
+    } catch (error) {
+      restore();
+      toast(String(error), true);
+    }
     set("idle");
     area.focus();
+  };
+  const cancel = () => {
+    if (state !== "listening" && state !== "starting") return;
+    tauri.core.invoke("voice_cancel").catch(() => {});
+    restore();
+    set("idle"); held = false;
+  };
+
+  button.addEventListener("click", () => { if (state === "idle") start(); else stop(); });
+
+  // Hold Space: the first press types a space as usual; if the key is still down when it starts
+  // repeating, that space is taken back and the recording begins.
+  area.addEventListener("keydown", (event) => {
+    if (event.code !== "Space" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (state !== "idle") { event.preventDefault(); return; }
+    if (!event.repeat) {
+      before = { value: area.value, start: area.selectionStart, end: area.selectionEnd };
+      return;
+    }
+    event.preventDefault();
+    if (before && area.value !== before.value) {
+      area.value = before.value;
+      area.selectionStart = before.start;
+      area.selectionEnd = before.end;
+    }
+    held = true;
+    start();
   });
-  return { cancel() { if (state === "listening") { tauri.core.invoke("voice_cancel").catch(() => {}); set("idle"); } } };
+  area.addEventListener("keyup", (event) => {
+    if (event.code === "Space" && held) { event.preventDefault(); stop(); }
+  });
+  area.addEventListener("blur", () => { if (held) stop(); });
+
+  tauri.event.listen("voice-level", (event) => {
+    if (state === "listening") bar.style.transform = `scaleX(${Math.max(0.04, Number(event.payload))})`;
+  });
+  tauri.event.listen("voice-partial", (event) => {
+    if (state === "listening" && event.payload) render(String(event.payload));
+  });
+  return { cancel };
 }
-if (tauri) {
-  tauri.event.listen("voice-model-progress", (event) => { if (event.payload < 100 && event.payload % 10 === 0) toast(`Downloading the speech model… ${event.payload}%`); });
-  tauri.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
-}
+tauri?.event.listen("voice-model-progress", (event) => { if (event.payload < 100 && event.payload % 10 === 0) toast(`Downloading the speech model… ${event.payload}%`); });
+tauri?.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
 
 function attachable(area, chips) {
   const files = [];
