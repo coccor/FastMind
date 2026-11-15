@@ -1210,6 +1210,43 @@ $("#make-demo").addEventListener("click", async () => {
 const MAX_FILE = 50 * 1024 * 1024;
 
 // A capture box that takes pasted screenshots and dropped files, shown as chips under it.
+// A microphone button: click to start, click again to stop, and the words land in the box.
+// The recording and the speech-to-text both happen in the app, on this computer.
+function voiceButton(button, area) {
+  if (!tauri || !button) return { cancel() {} };
+  button.hidden = false;
+  let state = "idle";
+  const insert = (text) => {
+    const at = area.selectionEnd ?? area.value.length;
+    const before = area.value.slice(0, at), after = area.value.slice(at);
+    const joined = (before && !/\s$/.test(before) ? " " : "") + text;
+    area.value = before + joined + after;
+    area.selectionStart = area.selectionEnd = before.length + joined.length;
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    area.focus();
+  };
+  const set = (next) => { state = next; button.classList.toggle("listening", next === "listening"); button.classList.toggle("working", next === "working"); };
+  button.addEventListener("click", async () => {
+    if (state === "working") return;
+    if (state === "idle") {
+      try { await tauri.core.invoke("voice_start"); set("listening"); } catch (error) { toast(String(error), true); }
+      return;
+    }
+    set("working");
+    try {
+      const text = await tauri.core.invoke("voice_stop");
+      if (text) insert(text); else toast("Didn't catch anything.");
+    } catch (error) { toast(String(error), true); }
+    set("idle");
+    area.focus();
+  });
+  return { cancel() { if (state === "listening") { tauri.core.invoke("voice_cancel").catch(() => {}); set("idle"); } } };
+}
+if (tauri) {
+  tauri.event.listen("voice-model-progress", (event) => { if (event.payload < 100 && event.payload % 10 === 0) toast(`Downloading the speech model… ${event.payload}%`); });
+  tauri.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
+}
+
 function attachable(area, chips) {
   const files = [];
   const render = () => {
@@ -1272,6 +1309,9 @@ async function saveCapture(text, files = []) {
 }
 
 const dialogFiles = attachable($("#capture-text"), $("#capture-files"));
+const dialogVoice = voiceButton($("#capture-mic"), $("#capture-text"));
+voiceButton($("#home-mic"), $("#home-capture-text"));
+$("#capture-dialog").addEventListener("close", () => dialogVoice.cancel());
 const clearDialogDraft = keepDraft($("#capture-text"), "fastmind.draft.dialog");
 
 function openCapture() {
@@ -1351,7 +1391,8 @@ function startCaptureOnly() {
   const area = $("#capture-text-mini");
   const files = attachable(area, $("#capture-files-mini"));
   const clearDraft = keepDraft(area, "fastmind.draft.window");
-  const close = () => (tauri ? tauri.core.invoke("hide_capture") : window.close());
+  const voice = voiceButton($("#capture-mic-mini"), area);
+  const close = () => { voice.cancel(); return tauri ? tauri.core.invoke("hide_capture") : window.close(); };
   $("#capture-close-mini").addEventListener("click", () => close());
   area.focus();
   $("#capture-form-mini").addEventListener("submit", async (event) => {
