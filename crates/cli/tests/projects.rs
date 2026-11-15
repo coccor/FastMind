@@ -30,7 +30,11 @@ fn work_inside_a_project_goes_to_its_notebook() {
     let root = real_root.as_path();
     let usual = root.join("usual");
     let project = root.join("pz-connector-kafka");
-    let planning = root.join("pz-planning/pz-connector-kafka/notes");
+    // One component at a time: a "/" inside a join stays "/" on Windows, and FastMind prints "\\".
+    let planning = root
+        .join("pz-planning")
+        .join("pz-connector-kafka")
+        .join("notes");
     std::fs::create_dir_all(&usual).unwrap();
     std::fs::create_dir_all(project.join("src")).unwrap();
     let config = root.join("settings.json");
