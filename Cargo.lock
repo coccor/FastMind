@@ -1217,6 +1217,7 @@ dependencies = [
  "futures-util",
  "opener",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

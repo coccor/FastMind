@@ -2,6 +2,7 @@
 //! computer. Nothing is sent anywhere except the one-time download of the model.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
@@ -11,8 +12,11 @@ use tauri::{AppHandle, Emitter};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const MODEL_FILE: &str = "ggml-base.en.bin";
-const MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
+/// Pinned to a commit of the model repository, with the size and SHA-256 of the file there, so
+/// a changed or cut-short download is never loaded.
+const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin";
+const MODEL_SIZE: u64 = 147_964_211;
+const MODEL_SHA256: &str = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
 /// What whisper expects.
 const SAMPLE_RATE: u32 = 16_000;
 /// Anything shorter is a mis-click, not speech.
@@ -40,25 +44,43 @@ fn model_path() -> PathBuf {
         .join(MODEL_FILE)
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether the file at `path` is exactly the pinned model.
+fn model_is_intact(path: &std::path::Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    if file.metadata().map_or(true, |m| m.len() != MODEL_SIZE) {
+        return false;
+    }
+    let mut hash = Sha256::new();
+    std::io::copy(&mut file, &mut hash).is_ok() && hex(&hash.finalize()) == MODEL_SHA256
+}
+
 /// Downloads the model the first time, telling the UI how far along it is.
 fn ensure_model(app: &AppHandle, voice: &Voice) -> Result<PathBuf, String> {
     let path = model_path();
     let _one_at_a_time = voice.download.lock().expect("download lock");
     if path.exists() {
-        return Ok(path);
+        if model_is_intact(&path) {
+            return Ok(path);
+        }
+        // Damaged or replaced: fetch it again rather than load it.
+        let _ = std::fs::remove_file(&path);
     }
     std::fs::create_dir_all(path.parent().expect("model folder")).map_err(|e| e.to_string())?;
     let response = ureq::get(MODEL_URL)
         .call()
         .map_err(|e| format!("Couldn't download the speech model: {e}"))?;
-    let total: u64 = response
-        .header("content-length")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let total = MODEL_SIZE;
     let partial = path.with_extension("part");
     let mut file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
     let mut reader = response.into_reader();
     let mut buffer = vec![0u8; 256 * 1024];
+    let mut hash = Sha256::new();
     let (mut done, mut last) = (0u64, 0u64);
     loop {
         let n = reader.read(&mut buffer).map_err(|e| e.to_string())?;
@@ -66,14 +88,22 @@ fn ensure_model(app: &AppHandle, voice: &Voice) -> Result<PathBuf, String> {
             break;
         }
         file.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+        hash.update(&buffer[..n]);
         done += n as u64;
-        if total > 0 && done - last > total / 100 {
+        if done > total {
+            break;
+        }
+        if done - last > total / 100 {
             last = done;
             let _ = app.emit("voice-model-progress", done * 100 / total);
         }
     }
     file.flush().map_err(|e| e.to_string())?;
     drop(file);
+    if done != total || hex(&hash.finalize()) != MODEL_SHA256 {
+        let _ = std::fs::remove_file(&partial);
+        return Err("The speech model download was incomplete or didn't match; try again.".into());
+    }
     std::fs::rename(&partial, &path).map_err(|e| e.to_string())?;
     let _ = app.emit("voice-model-progress", 100u64);
     Ok(path)
@@ -226,7 +256,7 @@ pub fn voice_start(app: AppHandle, voice: tauri::State<'_, Arc<Voice>>) -> Resul
         return Ok(());
     }
     *slot = Some(start_recording()?);
-    if !model_path().exists() {
+    if !model_is_intact(&model_path()) {
         let app = app.clone();
         std::thread::spawn(move || {
             use tauri::Manager;
