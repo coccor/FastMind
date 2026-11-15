@@ -305,6 +305,7 @@ const clearHomeDraft = keepDraft($("#home-capture-text"), "fastmind.draft.home")
 $("#home-capture").addEventListener("submit", async (event) => {
   event.preventDefault();
   const area = $("#home-capture-text");
+  await homeVoice.finish();
   if (await saveCapture(area.value, homeFiles.files)) { area.value = ""; homeFiles.clear(); clearHomeDraft(); loadHome(); }
 });
 $("#home-capture-text").addEventListener("keydown", (event) => {
@@ -1214,7 +1215,7 @@ const MAX_FILE = 50 * 1024 * 1024;
 // speak, with a bar that moves with your voice; let go (or click again) to finish. The recording
 // and the speech-to-text both happen in the app, on this computer.
 function voiceButton(button, area) {
-  if (!tauri || !button) return { cancel() {} };
+  if (!tauri || !button) return { cancel() {}, finish: async () => {} };
   button.hidden = false;
   const meter = document.createElement("span");
   meter.className = "meter";
@@ -1294,25 +1295,32 @@ function voiceButton(button, area) {
   let holdTimer = null;
   let spaceDown = false;
   let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
-  const arm = () => { quietUntil = Date.now() + 800; };
+  const arm = () => { quietUntil = Date.now() + 250; };
   area.addEventListener("focus", arm);
   if (tauri) tauri.event.listen("capture-shown", arm);
+  const trigger = () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (!spaceDown || !before || state !== "idle") return;
+    area.value = before.value;   // take back the spaces the hold typed
+    area.selectionStart = before.start;
+    area.selectionEnd = before.end;
+    held = true;
+    start();
+  };
   const disarm = () => { clearTimeout(holdTimer); holdTimer = null; spaceDown = false; };
   area.addEventListener("keydown", (event) => {
     if (event.code !== "Space" || event.ctrlKey || event.metaKey || event.altKey) return;
     if (state !== "idle") { event.preventDefault(); return; }
-    if (spaceDown || Date.now() < quietUntil) return;   // a repeat of a press already being timed
+    if (spaceDown) {   // a second Space with no letting go between: the key is held
+      event.preventDefault();
+      trigger();
+      return;
+    }
     spaceDown = true;
+    if (Date.now() < quietUntil) { before = null; return; }
     before = { value: area.value, start: area.selectionStart, end: area.selectionEnd };
-    holdTimer = setTimeout(() => {
-      holdTimer = null;
-      if (!spaceDown || state !== "idle") return;
-      area.value = before.value;
-      area.selectionStart = before.start;
-      area.selectionEnd = before.end;
-      held = true;
-      start();
-    }, HOLD_MS);
+    holdTimer = setTimeout(trigger, HOLD_MS);   // in case the key doesn't repeat
   });
   area.addEventListener("keyup", (event) => {
     if (event.code !== "Space") return;
@@ -1328,7 +1336,12 @@ function voiceButton(button, area) {
   tauri.event.listen("voice-partial", (event) => {
     if (state === "listening" && event.payload) render(String(event.payload));
   });
-  return { cancel };
+  // Ctrl+Enter while still talking: let the last words land before saving.
+  const finish = async () => {
+    while (state === "starting" || state === "working") await new Promise((r) => setTimeout(r, 30));
+    if (state === "listening") await stop();
+  };
+  return { cancel, finish };
 }
 tauri?.event.listen("voice-model-progress", (event) => { if (event.payload < 100 && event.payload % 10 === 0) toast(`Downloading the speech model… ${event.payload}%`); });
 tauri?.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
@@ -1402,7 +1415,7 @@ async function saveCapture(text, files = []) {
 
 const dialogFiles = attachable($("#capture-text"), $("#capture-files"));
 const dialogVoice = voiceButton($("#capture-mic"), $("#capture-text"));
-voiceButton($("#home-mic"), $("#home-capture-text"));
+const homeVoice = voiceButton($("#home-mic"), $("#home-capture-text"));
 $("#capture-dialog").addEventListener("close", () => dialogVoice.cancel());
 const clearDialogDraft = keepDraft($("#capture-text"), "fastmind.draft.dialog");
 
@@ -1415,6 +1428,7 @@ $("#capture-open").addEventListener("click", openCapture);
 $("#capture-cancel").addEventListener("click", () => $("#capture-dialog").close());
 $("#capture-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  await dialogVoice.finish();
   if (await saveCapture($("#capture-text").value, dialogFiles.files)) {
     $("#capture-text").value = "";
     dialogFiles.clear();
@@ -1489,6 +1503,7 @@ function startCaptureOnly() {
   area.focus();
   $("#capture-form-mini").addEventListener("submit", async (event) => {
     event.preventDefault();
+    await voice.finish();
     if (await saveCapture(area.value, files.files)) {
       area.value = "";
       files.clear();
