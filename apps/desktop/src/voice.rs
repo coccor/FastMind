@@ -13,12 +13,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-const MODEL_FILE: &str = "ggml-base.en.bin";
+const MODEL_FILE: &str = "ggml-small.en.bin";
 /// Pinned to a commit of the model repository, with the size and SHA-256 of the file there, so
 /// a changed or cut-short download is never loaded.
-const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin";
-const MODEL_SIZE: u64 = 147_964_211;
-const MODEL_SHA256: &str = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
+const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin";
+const MODEL_SIZE: u64 = 487_614_201;
+const MODEL_SHA256: &str = "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d";
 /// What whisper expects.
 const SAMPLE_RATE: u32 = 16_000;
 /// Anything shorter is a mis-click, not speech.
@@ -286,7 +286,7 @@ fn write_down(
         let seconds = piece.len() as f32 / rate as f32;
         let enough = seconds >= if finished { MIN_SECONDS } else { 1.0 };
         let text = if enough && !quiet(&piece) {
-            without_noises(&transcribe(&mut state, &resample(&piece, rate))?)
+            without_noises(&transcribe(&mut state, &resample(&piece, rate), finished)?)
         } else {
             String::new()
         };
@@ -341,8 +341,21 @@ fn resample(mono: &[f32], rate: u32) -> Vec<f32> {
         .collect()
 }
 
-fn transcribe(state: &mut whisper_rs::WhisperState, samples: &[f32]) -> Result<String, String> {
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+/// `careful` (the last pass) tries several readings and keeps the best; the live passes take the
+/// first, to keep up with the speaker.
+fn transcribe(
+    state: &mut whisper_rs::WhisperState,
+    samples: &[f32],
+    careful: bool,
+) -> Result<String, String> {
+    let mut params = FullParams::new(if careful {
+        SamplingStrategy::BeamSearch {
+            beam_size: 5,
+            patience: -1.0,
+        }
+    } else {
+        SamplingStrategy::Greedy { best_of: 1 }
+    });
     params.set_language(Some("en"));
     params.set_print_progress(false);
     params.set_print_realtime(false);

@@ -22,7 +22,7 @@ A link gets its page's title and description. **Esc** keeps a draft for next tim
 **Speak instead of typing:** hold **Space** in the box (or click the microphone beside Save) and
 talk. The words appear as you speak, with a bar that moves with your voice; let go and they're
 yours to fix and save. Speech is turned into text on your computer with whisper.cpp; audio is
-never sent anywhere. The first time, FastMind downloads the speech model (`base.en`, about 150 MB, English) to its data folder.
+never sent anywhere. The first time, FastMind downloads the speech model (`small.en`, about 490 MB, English) to its data folder.
 
 From a terminal or a script: `fastmind capture "…" --tag perf --attach ./ledger.log`.
 
