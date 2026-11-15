@@ -52,9 +52,13 @@ type Microphone = (Sender<()>, JoinHandle<()>, Arc<Mutex<Vec<f32>>>, u32);
 const LIVE_EVERY: Duration = Duration::from_millis(700);
 /// After this much speech in one piece, what's been written is kept and a new piece begins, so a
 /// long dictation doesn't get slower and slower.
-const PIECE_SECONDS: usize = 20;
+const PIECE_SECONDS: usize = 12;
 /// ...or, better, at a pause once there's this much.
-const PAUSE_AFTER_SECONDS: f32 = 6.0;
+const PAUSE_AFTER_SECONDS: f32 = 3.0;
+/// The careful model goes over a dictation in pieces about this long (cut at pauses), so it can
+/// be stopped between them and a new recording isn't kept waiting.
+const POLISH_TARGET_SECONDS: usize = 6;
+const POLISH_MAX_SECONDS: usize = 10;
 /// Quieter than this is silence: no point asking the model, which makes up words for noise.
 const SILENCE: f32 = 0.01;
 
@@ -75,6 +79,10 @@ pub struct Voice {
     /// Whisper must not set up a model while another is working (a pass in flight fails with
     /// "failed to encode"): loading and every pass take turns on this.
     engine: Mutex<()>,
+    /// The last dictation, at 16 kHz, kept so `voice_polish` can go over it with the careful model.
+    last_audio: Mutex<Option<Vec<f32>>>,
+    /// Asks a running polish to stop (a new recording, or saving, has made it pointless).
+    polish_cancel: AtomicBool,
 }
 
 fn model_path(spec: &ModelSpec) -> PathBuf {
@@ -269,6 +277,54 @@ fn quiet(samples: &[f32]) -> bool {
     samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs())) < SILENCE
 }
 
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+/// Whether the last half second is much quieter than the speech before it: a breath between
+/// phrases. Relative to how loud this person and this microphone are, so background noise
+/// doesn't hide the pauses.
+fn ends_in_pause(piece: &[f32], rate: u32) -> bool {
+    let tail = rate as usize / 2;
+    if piece.len() < tail * 4 {
+        return false;
+    }
+    let (head, end) = piece.split_at(piece.len() - tail);
+    let loud = rms(head);
+    loud > 0.005 && rms(end) < loud * 0.3
+}
+
+/// Cuts 16 kHz audio into pieces of at most `POLISH_MAX_SECONDS`, each ending at the quietest
+/// moment between `POLISH_TARGET_SECONDS` and that, so words aren't split.
+fn split_at_pauses(audio: &[f32]) -> Vec<std::ops::Range<usize>> {
+    let rate = SAMPLE_RATE as usize;
+    let (target, max, window) = (
+        POLISH_TARGET_SECONDS * rate,
+        POLISH_MAX_SECONDS * rate,
+        rate / 10,
+    );
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    while audio.len() - start > max {
+        let (mut best, mut quietest) = (start + max, f32::MAX);
+        let mut at = start + target;
+        while at + window <= start + max {
+            let level = rms(&audio[at..at + window]);
+            if level < quietest {
+                (quietest, best) = (level, at + window / 2);
+            }
+            at += window / 2;
+        }
+        pieces.push(start..best);
+        start = best;
+    }
+    pieces.push(start..audio.len());
+    pieces
+}
+
 /// What whisper writes for silence and noise, which isn't speech: `[BLANK_AUDIO]`, `(music)`.
 fn without_noises(text: &str) -> String {
     let mut out = String::new();
@@ -322,25 +378,12 @@ fn write_down(
         let text = if enough && !quiet(&piece) {
             let audio = resample(&piece, rate);
             let spoken = if finished {
-                // The last pass uses the careful model, if it loaded; else the quick one.
-                // (Already loaded when the window opened, unless this is the very first time.)
-                let careful = load_model(&app, &voice, &ACCURATE)
-                    .inspect_err(|error| {
-                        let _ = app.emit("voice-model-error", error.clone());
-                    })
-                    .ok()
-                    .and_then(|model| {
-                        let _alone = voice.engine.lock().expect("engine lock");
-                        model.create_state().ok()
-                    });
+                // Quick: the careful model gets its turn afterwards, in `voice_polish`.
                 let _alone = voice.engine.lock().expect("engine lock");
-                match careful {
-                    Some(mut careful) => transcribe(&mut careful, &audio, true)?,
-                    None => transcribe(&mut state, &audio, true)?,
-                }
+                transcribe(&mut state, &audio, true)?
             } else {
-                let _alone = voice.engine.lock().expect("engine lock");
                 // A live pass that fails costs only that update: the next one tries again.
+                let _alone = voice.engine.lock().expect("engine lock");
                 match transcribe(&mut state, &audio, false) {
                     Ok(text) => text,
                     Err(error) => {
@@ -361,6 +404,8 @@ fn write_down(
         );
         let all = joined(&kept, &text);
         if finished {
+            let everything = samples.lock().expect("samples lock").clone();
+            *voice.last_audio.lock().expect("audio lock") = Some(resample(&everything, rate));
             return Ok(all);
         }
         if done.load(Ordering::SeqCst) {
@@ -370,8 +415,7 @@ fn write_down(
             let _ = app.emit("voice-partial", &all);
         }
         // Keep what's written at a pause (a few seconds in) or, failing that, after a long run.
-        let pause = seconds > PAUSE_AFTER_SECONDS
-            && quiet(&piece[piece.len().saturating_sub(rate as usize / 2)..]);
+        let pause = seconds > PAUSE_AFTER_SECONDS && ends_in_pause(&piece, rate);
         if pause || piece.len() > PIECE_SECONDS * rate as usize {
             kept = all;
             from += piece.len();
@@ -469,6 +513,8 @@ pub async fn voice_start(
 ) -> Result<(), String> {
     let voice = voice.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        voice.polish_cancel.store(true, Ordering::SeqCst);
+        voice.last_audio.lock().expect("audio lock").take();
         let mut slot = voice.recording.lock().expect("recording lock");
         if slot.is_none() {
             *slot = Some(start_recording(app, voice.clone())?);
@@ -500,6 +546,64 @@ pub async fn voice_stop(voice: tauri::State<'_, Arc<Voice>>) -> Result<String, S
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Goes over the last dictation with the careful model, a piece at a time, and returns the
+/// better text ("" if it was stopped, or there was nothing to do). The page swaps it in only if
+/// the person hasn't edited the words in the meantime.
+#[tauri::command]
+pub async fn voice_polish(
+    app: AppHandle,
+    voice: tauri::State<'_, Arc<Voice>>,
+) -> Result<String, String> {
+    let voice = voice.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(audio) = voice.last_audio.lock().expect("audio lock").take() else {
+            return Ok(String::new());
+        };
+        voice.polish_cancel.store(false, Ordering::SeqCst);
+        let model = load_model(&app, &voice, &ACCURATE)?;
+        let mut state = {
+            let _alone = voice.engine.lock().expect("engine lock");
+            model
+                .create_state()
+                .map_err(|e| format!("Speech recognition failed: {e}"))?
+        };
+        let mut text = String::new();
+        for range in split_at_pauses(&audio) {
+            if voice.polish_cancel.load(Ordering::SeqCst) {
+                return Ok(String::new());
+            }
+            let piece = &audio[range];
+            if quiet(piece) || (piece.len() as f32) < MIN_SECONDS * SAMPLE_RATE as f32 {
+                continue;
+            }
+            let began = std::time::Instant::now();
+            let spoken = {
+                let _alone = voice.engine.lock().expect("engine lock");
+                transcribe(&mut state, piece, false)?
+            };
+            eprintln!(
+                "[voice] polish: {:.1}s took {} ms",
+                piece.len() as f32 / SAMPLE_RATE as f32,
+                began.elapsed().as_millis()
+            );
+            text = joined(&text, &without_noises(&spoken));
+        }
+        Ok(if voice.polish_cancel.load(Ordering::SeqCst) {
+            String::new()
+        } else {
+            text
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stops a polish that's running (the person is recording again, or saving).
+#[tauri::command]
+pub fn voice_polish_cancel(voice: tauri::State<'_, Arc<Voice>>) {
+    voice.polish_cancel.store(true, Ordering::SeqCst);
 }
 
 /// Temporary: lets the page say what it sees, so the terminal shows it.
@@ -557,6 +661,45 @@ mod tests {
         assert_eq!(without_noises(" Hello (music) there  [x] "), "Hello there");
         assert_eq!(joined("one", ""), "one");
         assert_eq!(joined("one", "two"), "one two");
+    }
+
+    #[test]
+    fn long_audio_is_cut_at_the_quiet_part() {
+        let rate = SAMPLE_RATE as usize;
+        // 25 s of tone with a gap at 8.0 s
+        let mut audio: Vec<f32> = (0..25 * rate)
+            .map(|i| 0.3 * (i as f32 * 0.05).sin())
+            .collect();
+        audio[8 * rate..8 * rate + rate / 5].fill(0.0);
+        let pieces = split_at_pauses(&audio);
+        assert_eq!(pieces.first().unwrap().start, 0);
+        assert_eq!(pieces.last().unwrap().end, audio.len());
+        for pair in pieces.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start);
+        }
+        assert!(pieces.iter().all(|p| p.len() <= POLISH_MAX_SECONDS * rate));
+        let cut = pieces[0].end as f32 / rate as f32;
+        assert!((7.9..8.3).contains(&cut), "cut at {cut}");
+        assert_eq!(split_at_pauses(&audio[..3 * rate]).len(), 1);
+    }
+
+    #[test]
+    fn a_pause_is_quiet_compared_with_the_speech() {
+        let rate = 16_000u32;
+        let talking: Vec<f32> = (0..rate * 4)
+            .map(|i| 0.2 * (i as f32 * 0.05).sin())
+            .collect();
+        let mut with_pause = talking.clone();
+        let end = with_pause.len();
+        with_pause[end - 8000..].iter_mut().for_each(|s| *s *= 0.05);
+        assert!(ends_in_pause(&with_pause, rate));
+        assert!(!ends_in_pause(&talking, rate));
+        // a noisy room still counts: the floor is lower than the voice
+        let noisy: Vec<f32> = with_pause
+            .iter()
+            .map(|s| s + 0.004 * (*s * 90.0).cos())
+            .collect();
+        assert!(ends_in_pause(&noisy, rate));
     }
 
     #[test]

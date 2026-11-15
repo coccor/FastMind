@@ -474,7 +474,9 @@ fn main() {
             voice::voice_stop,
             voice::voice_cancel,
             voice::voice_log,
-            voice::voice_warm
+            voice::voice_warm,
+            voice::voice_polish,
+            voice::voice_polish_cancel
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

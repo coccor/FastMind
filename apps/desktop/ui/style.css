@@ -363,3 +363,9 @@ legend { font-weight: 650; padding: 0 6px; }
 .meter { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--border, rgba(128,128,128,.3)); overflow: hidden; vertical-align: middle; margin-right: 6px; }
 .meter i { display: block; height: 100%; background: #d33; transform-origin: left; transform: scaleX(0); transition: transform 60ms linear; }
 @media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
+
+/* What the microphone is doing, in words: Listening, Finishing…, Polishing…. */
+.voice-status { font-size: 12px; color: var(--muted); margin-right: 8px; white-space: nowrap; }
+.voice-status:not([hidden])::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: middle; animation: status-pulse 1s ease-in-out infinite; }
+@keyframes status-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .voice-status:not([hidden])::before { animation: none; } }

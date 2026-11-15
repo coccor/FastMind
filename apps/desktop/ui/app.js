@@ -1223,8 +1223,17 @@ function voiceButton(button, area) {
   meter.innerHTML = "<i></i>";
   button.before(meter);
   const bar = meter.firstChild;
+  // What the app is doing, always in view: "Listening", "Finishing…", "Polishing…".
+  const status = document.createElement("span");
+  status.className = "voice-status";
+  status.hidden = true;
+  button.before(status);
+  const say = (text) => { status.hidden = !text; status.textContent = text; };
+  let download = "";   // "Downloading the speech model… 40%", while that's going on
   // idle -> starting -> listening -> working -> idle
   let state = "idle";
+  let polishing = 0;      // which polish is current (0: none); a new recording or Ctrl+Enter ends it
+  let inserted = null;    // the words last dictated, and where, so a polish can replace them
   let held = false;       // started by holding Space: letting go ends it
   let released = false;   // let go before the microphone was ready
   let anchor = null;      // the text around the spot where the words go
@@ -1237,10 +1246,14 @@ function voiceButton(button, area) {
     meter.hidden = next !== "listening";
     area.readOnly = next === "listening" || next === "working";
     if (next !== "listening") bar.style.transform = "scaleX(0)";
+    const words = { starting: "Starting…", listening: "Listening", working: "Finishing…" }[next] || "";
+    if (next !== "idle") say(download || words);
+    else if (!polishing) say("");
   };
   const render = (text) => {
     const gap = text && anchor.before && !/\s$/.test(anchor.before) ? " " : "";
     const value = anchor.before + gap + text;
+    inserted = { start: anchor.before.length, text: gap + text };
     area.value = value + anchor.after;
     area.selectionStart = area.selectionEnd = value.length;
     area.scrollTop = area.scrollHeight;
@@ -1248,8 +1261,41 @@ function voiceButton(button, area) {
   };
   const restore = () => { if (anchor) render(""); };
 
+  const stopPolishing = () => {
+    if (!polishing) return;
+    polishing = 0;
+    tauri.core.invoke("voice_polish_cancel").catch(() => {});
+    say("");
+  };
+  // After the quick pass: the careful model goes over the same words and, if you haven't
+  // touched them since, swaps in its better version. Saving or recording again drops it.
+  const polish = async () => {
+    const mine = ++polishing;
+    const mark = inserted;
+    say("Polishing…");
+    try {
+      const better = await tauri.core.invoke("voice_polish");
+      if (mine !== polishing || !better || !mark) return;
+      const now = area.value.slice(mark.start, mark.start + mark.text.length);
+      if (now !== mark.text) return;   // edited meanwhile: leave it alone
+      const gap = mark.text.startsWith(" ") ? " " : "";
+      const trail = /\s$/.test(mark.text) ? " " : "";
+      const fresh = gap + better + trail;
+      const caret = area.selectionEnd;
+      area.value = area.value.slice(0, mark.start) + fresh + area.value.slice(mark.start + mark.text.length);
+      const end = mark.start + mark.text.length;
+      if (caret >= end) area.selectionStart = area.selectionEnd = caret + fresh.length - mark.text.length;
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    } catch {
+      // Polishing is a bonus: the quick words stay.
+    } finally {
+      if (mine === polishing) { polishing = 0; if (state === "idle") say(""); }
+    }
+  };
+
   const start = async () => {
     if (state !== "idle") return;
+    stopPolishing();
     set("starting");
     released = false;
     const at = area.selectionEnd ?? area.value.length;
@@ -1272,6 +1318,10 @@ function voiceButton(button, area) {
     try {
       const text = await tauri.core.invoke("voice_stop");
       if (text) { render(text + (anchor.after && /^\s/.test(anchor.after) ? "" : " ")); } else { restore(); toast("Didn't catch anything."); }
+      set("idle");
+      area.focus();
+      if (text) polish();
+      return;
     } catch (error) {
       restore();
       toast(String(error), true);
@@ -1356,10 +1406,17 @@ function voiceButton(button, area) {
   const finish = async () => {
     while (state === "starting" || state === "working") await new Promise((r) => setTimeout(r, 30));
     if (state === "listening") await stop();
+    stopPolishing();   // save what's there now: no waiting for the careful pass
   };
   return { cancel, finish };
 }
-tauri?.event.listen("voice-model-progress", (event) => { if (event.payload < 100 && event.payload % 10 === 0) toast(`Downloading the speech model… ${event.payload}%`); });
+// The download shows up in each microphone's status label (see `download` above).
+tauri?.event.listen("voice-model-progress", (event) => {
+  document.querySelectorAll(".voice-status").forEach((label) => {
+    if (label.hidden) return;
+    label.textContent = event.payload < 100 ? `Downloading the speech model… ${event.payload}%` : label.textContent;
+  });
+});
 tauri?.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
 
 function attachable(area, chips) {
