@@ -13,12 +13,29 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-const MODEL_FILE: &str = "ggml-small.en.bin";
-/// Pinned to a commit of the model repository, with the size and SHA-256 of the file there, so
-/// a changed or cut-short download is never loaded.
-const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin";
-const MODEL_SIZE: u64 = 487_614_201;
-const MODEL_SHA256: &str = "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d";
+/// A speech model, pinned to a commit of the model repository with the size and SHA-256 of the
+/// file there, so a changed or cut-short download is never loaded.
+struct ModelSpec {
+    file: &'static str,
+    url: &'static str,
+    size: u64,
+    sha256: &'static str,
+}
+
+/// Writes the words down while you talk: quick, a little less careful.
+const FAST: ModelSpec = ModelSpec {
+    file: "ggml-base.en.bin",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin",
+    size: 147_964_211,
+    sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+};
+/// Goes over the last stretch once you let go: slower, more accurate.
+const ACCURATE: ModelSpec = ModelSpec {
+    file: "ggml-small.en.bin",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin",
+    size: 487_614_201,
+    sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+};
 /// What whisper expects.
 const SAMPLE_RATE: u32 = 16_000;
 /// Anything shorter is a mis-click, not speech.
@@ -52,15 +69,16 @@ struct Recording {
 #[derive(Default)]
 pub struct Voice {
     recording: Mutex<Option<Recording>>,
-    model: Mutex<Option<Arc<WhisperContext>>>,
+    fast: Mutex<Option<Arc<WhisperContext>>>,
+    accurate: Mutex<Option<Arc<WhisperContext>>>,
     download: Mutex<()>,
 }
 
-fn model_path() -> PathBuf {
+fn model_path(spec: &ModelSpec) -> PathBuf {
     directories::ProjectDirs::from("dev", "coccor", "FastMind")
         .map(|dirs| dirs.data_dir().join("models"))
         .unwrap_or_else(|| PathBuf::from("fastmind-models"))
-        .join(MODEL_FILE)
+        .join(spec.file)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -70,26 +88,26 @@ fn hex(bytes: &[u8]) -> String {
 /// Whether the model is on disk at the right size. The file only gets its name after the whole
 /// download matched the pinned SHA-256 (see `ensure_model`), so the size is enough to notice a
 /// cut-short or swapped file without re-reading 490 MB on every start.
-fn model_is_present(path: &std::path::Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.len() == MODEL_SIZE)
+fn model_is_present(spec: &ModelSpec) -> bool {
+    std::fs::metadata(model_path(spec)).is_ok_and(|m| m.len() == spec.size)
 }
 
 /// Downloads the model the first time, telling the UI how far along it is.
-fn ensure_model(app: &AppHandle, voice: &Voice) -> Result<PathBuf, String> {
-    let path = model_path();
+fn ensure_model(app: &AppHandle, voice: &Voice, spec: &ModelSpec) -> Result<PathBuf, String> {
+    let path = model_path(spec);
     let _one_at_a_time = voice.download.lock().expect("download lock");
     if path.exists() {
-        if model_is_present(&path) {
+        if model_is_present(spec) {
             return Ok(path);
         }
         // Damaged or replaced: fetch it again rather than load it.
         let _ = std::fs::remove_file(&path);
     }
     std::fs::create_dir_all(path.parent().expect("model folder")).map_err(|e| e.to_string())?;
-    let response = ureq::get(MODEL_URL)
+    let response = ureq::get(spec.url)
         .call()
         .map_err(|e| format!("Couldn't download the speech model: {e}"))?;
-    let total = MODEL_SIZE;
+    let total = spec.size;
     let partial = path.with_extension("part");
     let mut file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
     let mut reader = response.into_reader();
@@ -114,7 +132,7 @@ fn ensure_model(app: &AppHandle, voice: &Voice) -> Result<PathBuf, String> {
     }
     file.flush().map_err(|e| e.to_string())?;
     drop(file);
-    if done != total || hex(&hash.finalize()) != MODEL_SHA256 {
+    if done != total || hex(&hash.finalize()) != spec.sha256 {
         let _ = std::fs::remove_file(&partial);
         return Err("The speech model download was incomplete or didn't match; try again.".into());
     }
@@ -123,18 +141,27 @@ fn ensure_model(app: &AppHandle, voice: &Voice) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn load_model(app: &AppHandle, voice: &Voice) -> Result<Arc<WhisperContext>, String> {
-    if let Some(model) = voice.model.lock().expect("model lock").clone() {
+fn load_model(
+    app: &AppHandle,
+    voice: &Voice,
+    spec: &'static ModelSpec,
+) -> Result<Arc<WhisperContext>, String> {
+    let slot = if spec.file == FAST.file {
+        &voice.fast
+    } else {
+        &voice.accurate
+    };
+    if let Some(model) = slot.lock().expect("model lock").clone() {
         return Ok(model);
     }
-    let path = ensure_model(app, voice)?;
+    let path = ensure_model(app, voice, spec)?;
     let context = WhisperContext::new_with_params(
         path.to_str().ok_or("The model path isn't valid text")?,
         WhisperContextParameters::default(),
     )
     .map_err(|e| format!("Couldn't load the speech model: {e}"))?;
     let context = Arc::new(context);
-    *voice.model.lock().expect("model lock") = Some(context.clone());
+    *slot.lock().expect("model lock") = Some(context.clone());
     Ok(context)
 }
 
@@ -270,9 +297,14 @@ fn write_down(
     done: Arc<AtomicBool>,
 ) -> Result<String, String> {
     // The first time this downloads the model; the microphone keeps listening meanwhile.
-    let model = load_model(&app, &voice).inspect_err(|error| {
+    let model = load_model(&app, &voice, &FAST).inspect_err(|error| {
         let _ = app.emit("voice-model-error", error.clone());
     })?;
+    // The careful model loads (or downloads) meanwhile, for the last pass.
+    let mut accurate = Some({
+        let (app, voice) = (app.clone(), voice.clone());
+        std::thread::spawn(move || load_model(&app, &voice, &ACCURATE))
+    });
     let mut state = model
         .create_state()
         .map_err(|e| format!("Speech recognition failed: {e}"))?;
@@ -284,13 +316,28 @@ fn write_down(
         let enough = seconds >= if finished { MIN_SECONDS } else { 1.0 };
         let began = std::time::Instant::now();
         let text = if enough && !quiet(&piece) {
-            let stop = (!finished).then(|| done.clone());
-            without_noises(&transcribe(
-                &mut state,
-                &resample(&piece, rate),
-                finished,
-                stop,
-            )?)
+            let audio = resample(&piece, rate);
+            let spoken = if finished {
+                // The last pass uses the careful model, if it loaded; else the quick one.
+                let careful = accurate
+                    .take()
+                    .and_then(|loading| loading.join().ok())
+                    .and_then(|loaded| {
+                        loaded
+                            .inspect_err(|error| {
+                                let _ = app.emit("voice-model-error", error.clone());
+                            })
+                            .ok()
+                    })
+                    .and_then(|model| model.create_state().ok());
+                match careful {
+                    Some(mut careful) => transcribe(&mut careful, &audio, true, None)?,
+                    None => transcribe(&mut state, &audio, true, None)?,
+                }
+            } else {
+                transcribe(&mut state, &audio, false, Some(done.clone()))?
+            };
+            without_noises(&spoken)
         } else {
             String::new()
         };
@@ -381,6 +428,10 @@ fn transcribe(
     params.set_print_special(false);
     params.set_print_timestamps(false);
     params.set_no_context(true);
+    // Whisper reads a fixed 30 seconds however short the speech is, which is what makes it slow.
+    // Look only at about as much as was said (50 steps a second, with some room): 4x faster.
+    let steps = (samples.len() as f32 / SAMPLE_RATE as f32 * 50.0).ceil() as i32 + 150;
+    params.set_audio_ctx(steps.clamp(300, 1500));
     // Half the cores: the rest keep the window and the microphone responsive.
     params.set_n_threads(
         std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 6)) as i32,
@@ -459,8 +510,10 @@ pub fn voice_log(message: String) {
 pub async fn voice_warm(app: AppHandle, voice: tauri::State<'_, Arc<Voice>>) -> Result<(), String> {
     let voice = voice.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if model_is_present(&model_path()) {
-            let _ = load_model(&app, &voice);
+        for spec in [&FAST, &ACCURATE] {
+            if model_is_present(spec) {
+                let _ = load_model(&app, &voice, spec);
+            }
         }
     })
     .await
