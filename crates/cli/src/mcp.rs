@@ -1,7 +1,9 @@
 //! `fastmind mcp`: the notebook as an MCP server on stdin/stdout, for coding agents (Claude Code,
 //! Codex, Claude Desktop…). Agents search and read notes before they dig into something, and
 //! save what they find as fresh memories, which Dream settles overnight. Its `note` prompt is a
-//! slash command in Claude Code (`/mcp__fastmind__note`): write up this session and save it.
+//! slash command in Claude Code (`/mcp__fastmind__note`): write up this session and save it. The
+//! `note_instructions` tool returns the same text, for the `/fastmind` skill that
+//! `fastmind agent install` adds (a skill can call a tool, but not a prompt).
 
 use fastmind_core::api::App;
 use serde_json::{Value, json};
@@ -55,6 +57,16 @@ fn tools() -> Value {
                 },
                 "required": ["title", "summary", "body"]
             }
+        },
+        {
+            "name": "note_instructions",
+            "description": "How to write up this session as a note in the user's FastMind notebook and save it. Call it when the user asks to note, save or write up the session or the work in FastMind (the /fastmind command), then do what it says.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "focus": {"type": "string", "description": "What the note should be about, if not the whole session (optional)"}
+                }
+            }
         }
     ])
 }
@@ -75,16 +87,24 @@ fn prompts() -> Value {
 /// The `note` prompt: write up this session, the way the notebook's ai-session skill says,
 /// and save it.
 fn note_prompt(app: &App, args: &Value) -> Result<Value, Value> {
+    let prompt = note_instructions(app, &args["focus"])
+        .map_err(|e| json!({ "code": -32603, "message": e }))?;
+    Ok(json!({
+        "description": "Write up this session as a FastMind note",
+        "messages": [{ "role": "user", "content": { "type": "text", "text": prompt } }]
+    }))
+}
+
+/// What the `note` prompt and the `note_instructions` tool hand the agent: the steps, the
+/// user's writing preferences and the notebook's ai-session skill.
+fn note_instructions(app: &App, focus: &Value) -> Result<String, String> {
     let skill = app
         .call("skill_get", json!({ "name": "ai-session" }))
-        .map_err(|e| json!({ "code": -32603, "message": e.0 }))?;
+        .map_err(|e| e.0)?;
     let text = skill["skill"]["text"].as_str().unwrap_or("");
     let skill_body = fastmind_core::frontmatter::body(text).trim();
     let preferences = app.settings().writing.instructions;
-    let focus = args["focus"]
-        .as_str()
-        .map(str::trim)
-        .filter(|f| !f.is_empty());
+    let focus = focus.as_str().map(str::trim).filter(|f| !f.is_empty());
     let mut prompt = String::from(
         "Write up the work we did in this session as a note for my FastMind notebook, and save it.\n\n\
          1. First call search_notes with a few words about the work, to find notes already about it.\n\
@@ -105,10 +125,7 @@ fn note_prompt(app: &App, args: &Value) -> Result<Value, Value> {
         ));
     }
     prompt.push_str(&format!("\n---\n\n{skill_body}\n"));
-    Ok(json!({
-        "description": "Write up this session as a FastMind note",
-        "messages": [{ "role": "user", "content": { "type": "text", "text": prompt } }]
-    }))
+    Ok(prompt)
 }
 
 fn text_result(text: String, is_error: bool) -> Value {
@@ -117,6 +134,9 @@ fn text_result(text: String, is_error: bool) -> Value {
 
 fn call_tool(app: &App, name: &str, args: &Value) -> Value {
     let result = match name {
+        "note_instructions" => {
+            note_instructions(app, &args["focus"]).map_err(fastmind_core::Error::msg)
+        }
         "search_notes" => app
             .call(
                 "search",
@@ -231,7 +251,7 @@ pub fn serve(app: &App) -> std::io::Result<()> {
                 "protocolVersion": params["protocolVersion"].as_str().unwrap_or(PROTOCOL),
                 "capabilities": { "tools": {}, "prompts": {} },
                 "serverInfo": { "name": "fastmind", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "The user's notebook. Search it before investigating something that may already be written down; save findings worth keeping with save_finding. The note prompt writes up the session."
+                "instructions": "The user's notebook. Search it before investigating something that may already be written down; save findings worth keeping with save_finding. The note prompt (or the note_instructions tool) writes up the session."
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools() })),

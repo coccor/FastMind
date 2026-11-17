@@ -664,6 +664,7 @@ impl App {
             }
             "settings_set" => {
                 let settings: Settings = arg(&args, "settings")?;
+                settings.hotkeys.check().map_err(Error::msg)?;
                 self.replace_settings(settings)?;
                 json!({ "ok": true })
             }
@@ -705,7 +706,7 @@ impl App {
                 };
                 json!({
                     "command": command,
-                    // The MCP server (with /mcp__fastmind__note) and the SessionEnd hook, in one go.
+                    // The MCP server, the /fastmind skill and the SessionEnd hook, in one go.
                     "claude_code": format!("{quoted} agent install"),
                     "codex": format!("[mcp_servers.fastmind]\ncommand = {}\nargs = [\"mcp\"]", serde_json::to_string(&command)?),
                 })

@@ -46,19 +46,27 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
                           Print one, open this notebook's version in your editor
                           (made from the default), or go back to the default
   setup DIR               Use DIR as the notebook (made if missing)
+  project                 Projects with a notebook of their own, and which one
+                          applies here
+  project set NOTEBOOK [DIR]
+                          Work inside DIR (default: here) uses NOTEBOOK (made if
+                          missing): commands run there, and coding agents
+  project unset [DIR]     DIR goes back to the usual notebook
   demo [DIR]              Make a messy demo notebook and use it
   serve [--port N] [--ui DIR]
                           Serve the app's UI and API on localhost (for a browser)
   mcp                     Serve the notebook to coding agents (MCP over stdio)
   agent install [--no-hook] | uninstall | status
-                          Connect FastMind to Claude Code: the MCP server (with the
-                          /mcp__fastmind__note command) and a SessionEnd hook that
-                          writes up each session when it ends
+                          Connect FastMind to Claude Code: the MCP server, the
+                          /fastmind skill, a SessionEnd hook that writes up
+                          each session when it ends and a SessionStart hook
+                          that tells the next one what the last ones did
   import-session FILE     Write up one Claude Code or Codex transcript now
   settings                Show where settings live and what they are
 
 Options:
-  --notebook DIR          Use this notebook instead of the one in settings
+  --notebook DIR          Use this notebook instead of the one in settings (or the
+                          project's, see `project`)
   --json                  Print raw JSON
 
 Exit codes: 0 done, 1 failed, 2 bad arguments.";
@@ -115,9 +123,13 @@ fn main() -> ExitCode {
         }
     };
     let mut settings = Settings::load();
-    let persist = args.notebook.is_none();
-    if let Some(notebook) = &args.notebook {
-        settings.notebook = Some(notebook.clone());
+    let notebook = args
+        .notebook
+        .clone()
+        .or_else(|| project_notebook(&settings, &args.rest));
+    let persist = notebook.is_none();
+    if let Some(notebook) = notebook {
+        settings.notebook = Some(notebook);
     }
     let app = if persist {
         App::new(settings)
@@ -135,6 +147,90 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Commands that change settings work on the real settings wherever they run; every other
+/// command run inside a project folder uses that project's notebook.
+const SETTINGS_COMMANDS: [&str; 7] = [
+    "setup", "demo", "model", "settings", "project", "agent", "agents",
+];
+
+fn project_notebook(settings: &Settings, rest: &[String]) -> Option<PathBuf> {
+    let command = rest.first().map(String::as_str).unwrap_or("");
+    if SETTINGS_COMMANDS.contains(&command) {
+        return None;
+    }
+    let here = std::env::current_dir().ok()?;
+    settings.notebook_for(&here).cloned()
+}
+
+/// `fastmind project …`: reads and writes the settings file directly, so it never touches
+/// the notebook chosen in the app.
+fn project(rest: &[String]) -> Result<(), Failure> {
+    let absolute = |p: &str| std::path::absolute(p).map_err(|e| Failure::Failed(e.to_string()));
+    let here = || std::env::current_dir().map_err(|e| Failure::Failed(e.to_string()));
+    let mut settings = Settings::load();
+    match rest.first().map(String::as_str) {
+        None | Some("list") => {
+            if settings.project_notebooks.is_empty() {
+                println!(
+                    "No project has a notebook of its own. fastmind project set NOTEBOOK [DIR]"
+                );
+            }
+            for (dir, notebook) in &settings.project_notebooks {
+                println!("{}  ->  {}", dir.display(), notebook.display());
+            }
+            let here = here()?;
+            let using = settings
+                .notebook_for(&here)
+                .map(|n| format!("{} (this project's)", n.display()))
+                .or_else(|| {
+                    settings
+                        .notebook
+                        .as_ref()
+                        .map(|n| format!("{} (the usual one)", n.display()))
+                })
+                .unwrap_or_else(|| "none chosen yet".into());
+            println!("\nHere ({}): {using}", here.display());
+            return Ok(());
+        }
+        Some("set") => {
+            let notebook = rest
+                .get(1)
+                .ok_or_else(|| usage("project set needs the notebook folder"))?;
+            let notebook = absolute(notebook)?;
+            let dir = match rest.get(2) {
+                Some(dir) => absolute(dir)?,
+                None => here()?,
+            };
+            std::fs::create_dir_all(&notebook).map_err(|e| Failure::Failed(e.to_string()))?;
+            settings
+                .project_notebooks
+                .insert(dir.clone(), notebook.clone());
+            settings.save()?;
+            println!("Work in {} now uses {}", dir.display(), notebook.display());
+        }
+        Some("unset" | "remove") => {
+            let dir = match rest.get(1) {
+                Some(dir) => absolute(dir)?,
+                None => here()?,
+            };
+            if settings.project_notebooks.remove(&dir).is_none() {
+                return Err(Failure::Failed(format!(
+                    "{} has no notebook of its own",
+                    dir.display()
+                )));
+            }
+            settings.save()?;
+            println!("Work in {} uses the usual notebook again", dir.display());
+        }
+        Some(other) => {
+            return Err(usage(&format!(
+                "unknown project action \"{other}\": set, unset or list"
+            )));
+        }
+    }
+    Ok(())
 }
 
 enum Failure {
@@ -467,6 +563,7 @@ fastmind skills show NAME | edit NAME | reset NAME"
                 serde_json::to_string_pretty(&settings).unwrap_or_default()
             );
         }
+        "project" | "projects" => project(&rest)?,
         "mcp" => mcp::serve(app).map_err(|e| Failure::Failed(e.to_string()))?,
         "agent" | "agents" => {
             let action = rest.first().map(String::as_str).unwrap_or("status");
@@ -490,7 +587,11 @@ fastmind skills show NAME | edit NAME | reset NAME"
             Some("session-end") => {
                 let _ = agent::session_end();
             }
-            _ => return Err(usage("hook session-end")),
+            // And when one starts: at worst it adds nothing.
+            Some("session-start") => {
+                let _ = agent::session_start();
+            }
+            _ => return Err(usage("hook session-end | session-start")),
         },
         "import-session" => {
             let path = rest.join(" ");

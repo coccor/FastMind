@@ -122,10 +122,11 @@ Never proposed: "Work" (a `type: project` home note) and "Reading list" (`pin: t
 ## 8. Give your coding agent the notebook
 
 1. Run `fastmind agent install` (Settings › Connect your coding agents shows it). It adds the
-   MCP server and the SessionEnd hook; `fastmind agent status` shows both.
+   MCP server, the SessionEnd hook and the SessionStart hook; `fastmind agent status` shows
+   them all.
 2. In a Claude Code session ask "search my notes for the ledger lag". It calls `search_notes`
    and reads the note.
-3. Type `/mcp__fastmind__note` when the work is done. Claude searches for related notes, writes
+3. Type `/fastmind` when the work is done. Claude searches for related notes, writes
    the session up (a short title, a summary, what was found, decided and done) and saves it;
    it says what it saved.
 4. Quit the session. A second later the hook has handed it off; a few seconds after that a note

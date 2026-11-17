@@ -21,11 +21,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Linux packages for the desktop app (webview, tray, hotkeys)
+      - name: Linux packages for the desktop app (webview, tray, hotkeys, microphone)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libasound2-dev
 
       - name: Format
         if: runner.os == 'Linux'
@@ -33,7 +33,9 @@ jobs:
 
       - name: UI script parses
         if: runner.os == 'Linux'
-        run: node --check apps/desktop/ui/app.js
+        run: |
+          node --check apps/desktop/ui/icons.js
+          node --check apps/desktop/ui/app.js
 
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -57,7 +59,12 @@ jobs:
           # A stand-in AI: an OpenAI-compatible server on localhost (see .github/fake-model.py).
           py=$(command -v python3 || command -v python)
           "$py" .github/fake-model.py 8099 &
-          sleep 2
+          # Wait until it listens: a fixed sleep lost the race on a slow Windows runner.
+          "$py" -c "import socket, time
+          for _ in range(60):
+              try: socket.create_connection(('127.0.0.1', 8099), 1).close(); break
+              except OSError: time.sleep(0.5)
+          else: raise SystemExit('the stand-in AI never started')"
           $bin model local stub --url http://127.0.0.1:8099/v1
           $bin demo "$RUNNER_TEMP/fastmind/demo"
           $bin capture "Cross-platform capture from $RUNNER_OS #ci"

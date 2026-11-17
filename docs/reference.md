@@ -21,6 +21,28 @@
 Hotkeys can be changed in Settings and apply at once. Closing the window keeps FastMind in the
 tray, where it dreams at night.
 
+### Hotkeys on Linux (Wayland)
+
+To change a key, click it in Settings › Hotkeys and press the new one (Esc cancels).
+
+Wayland doesn't let an app take keys for the whole desktop, so there FastMind asks the desktop's
+global shortcuts service (the XDG portal) for them, and Settings › Hotkeys says how that went:
+
+- **Hyprland** registers FastMind's shortcuts but leaves the keys to its config, so FastMind binds
+  them itself, live over Hyprland's IPC, while it runs: again after every config reload, and
+  gone when it quits. Nothing is written to your config. Keys you already bound in Hyprland are
+  left alone and flagged in Settings. To bind the keys yourself instead, switch off **Bind these
+  keys in Hyprland while FastMind runs** and use `hl.dsp.global("dev.coccor.fastmind:capture")`
+  (and `:remember`) in your config.
+- **KDE, GNOME**: the desktop may ask you to confirm the keys. Where it can, **Change in the
+  desktop's settings…** opens its own dialog for them.
+- **Anywhere else**, bind a key in your desktop to run `fastmind-desktop --capture` (or
+  `--remember`): it opens the box in the FastMind that's already running.
+
+The portal only knows apps by their desktop entry, `dev.coccor.fastmind.desktop`. If none is
+installed, FastMind writes a hidden one to `~/.local/share/applications`, pointing at its binary.
+On X11 the hotkeys work as on Windows and macOS.
+
 ## Choosing the AI
 
 FastMind runs on an AI you choose, and won't start without one:
@@ -39,6 +61,8 @@ The first run, and each `fastmind model …`, checks the AI answers before anyth
 
 ```
 fastmind setup ~/Notes                    # choose the notebook
+fastmind project set ~/Plans/api/notes    # this project (and agents in it) use its own notebook
+fastmind project | project unset [DIR]    # which projects have one; give one up
 fastmind capture "lag spikes in the ledger batch" --tag perf --attach ./ledger.log
 fastmind write "Fresh memories/Lag.md"    # write a captured note (again) with the model
 fastmind search "#perf ledger"

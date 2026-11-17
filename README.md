@@ -79,7 +79,7 @@ Merge, gather, archive, fix links, pack. Every proposal carries the AI's reason,
 </tr>
 </table>
 
-**And also:** your Claude Code and Codex sessions become notes · `/mcp__fastmind__note` in Claude
+**And also:** your Claude Code and Codex sessions become notes · `/fastmind` in Claude
 Code · every job the AI does follows a [skill](docs/features.md#skills-how-the-ai-works) you can
 read and edit · a Home page every morning · a `fastmind` command that does everything the app does.
 
@@ -103,8 +103,9 @@ fastmind agent install
 ```
 
 That connects Claude Code: the MCP server for every project (`search_notes`, `read_note`,
-`ask_notebook`, `save_finding`), `/mcp__fastmind__note` to write up the work, and a `SessionEnd`
-hook that writes up each session when it ends. Codex and Claude Desktop use `fastmind mcp`.
+`ask_notebook`, `save_finding`), a `/fastmind` skill to write up the work, a `SessionEnd`
+hook that writes up each session when it ends, and a `SessionStart` hook that tells the next
+session in the project what the last ones did. Codex and Claude Desktop use `fastmind mcp`.
 [More on agents](docs/features.md#coding-agents).
 
 ## FAQ
@@ -125,10 +126,10 @@ their titles.
 
 ## Building from source
 
-You need Rust (stable). On Linux the desktop app also needs WebKitGTK and the tray libraries:
+You need Rust (stable). On Linux the desktop app also needs WebKitGTK, the tray libraries and ALSA (for the microphone):
 
 ```sh
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libasound2-dev
 cargo test --workspace
 cargo build --release -p fastmind-desktop -p fastmind-cli
 ```

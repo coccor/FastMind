@@ -20,6 +20,13 @@ One hotkey (**Ctrl+Alt+Space**, **Cmd+Option+Space** on macOS) opens a small box
 you're doing. Type, paste a screenshot or drop a file, press **Ctrl+Enter**, and you're back.
 A link gets its page's title and description. **Esc** keeps a draft for next time. `#tags` work.
 
+**Speak instead of typing:** open the box, hold **Space** and talk. The words appear as you
+speak, with punctuation and capitals, and a bar moves with your voice; let go, fix anything, and
+press **Ctrl+Enter** (which also waits for your last words). The microphone beside Save works
+too. Speech is turned into text on your computer by NVIDIA's Nemotron streaming model (English)
+running through sherpa-onnx; audio is never sent anywhere. The first time, FastMind downloads the
+model (about 460 MB, checked against a pinned SHA-256) to its data folder.
+
 From a terminal or a script: `fastmind capture "…" --tag perf --attach ./ledger.log`.
 
 ## Captures become finished notes
@@ -144,13 +151,23 @@ shows it with this computer's path):
 fastmind agent install      # agent status | agent uninstall
 ```
 
-- **`/mcp__fastmind__note`** in any Claude Code session writes up the work, following the
+- **`/fastmind`** in any Claude Code session writes up the work, following the
   notebook's `ai-session` skill, and saves it. Add words after it to focus the note:
-  `/mcp__fastmind__note the decision about the cache`.
+  `/fastmind the decision about the cache`. It's a skill in `~/.claude/skills/fastmind/` that
+  `fastmind agent install` adds; it fetches the steps from the MCP server's `note_instructions`
+  tool. The same thing is the MCP prompt `/mcp__fastmind__note` (Claude Code names MCP prompts
+  `/mcp__<server>__<prompt>`, hence the skill).
 - **Every session is written up when it ends**, by a `SessionEnd` hook. The hook hands the
   transcript to a background `fastmind import-session`, so quitting doesn't wait; sessions with
   nothing worth keeping get no note. What happened is logged in `session-hook.log` beside the
   settings file.
+- **Every session starts knowing what the last ones did**, by a `SessionStart` hook: the
+  title, date, branch and summary of the project's five newest session notes, with their
+  paths, so the agent can `read_note` one or `search_notes` for more. It reads only that
+  project's folder in `AI sessions` and calls no model, so starting stays quick. It runs when
+  a session starts or after `/clear`, not on resume or after a compaction. If the session
+  before ended without a write-up (the terminal was closed, it crashed), the hook writes that
+  one up in the background once it has been quiet for the usual 20 minutes.
 - Agents can also `search_notes`, `read_note` and `ask_notebook` before they dig into
   something, and `save_finding` (title, summary, body, kind, tags) whenever they learn
   something. Findings land as fresh memories tagged `agent`, with secrets removed.
@@ -159,6 +176,14 @@ fastmind agent install      # agent status | agent uninstall
 and the hook to `~/.claude/settings.json` (keeping a `.fastmind-backup` copy). Codex users add
 the MCP server to `~/.codex/config.toml`; Settings shows the lines. Claude Desktop and other MCP
 clients run `fastmind mcp`.
+
+**A notebook per project.** By default every project's notes go to your notebook. To give a
+project its own, run `fastmind project set ~/planning/my-service/notes` inside it (or
+`fastmind project set NOTEBOOK DIR`). Agents working anywhere in that folder then search and save
+there, and its sessions are written up there; so are `fastmind` commands run inside it. The
+innermost project wins, so `~/work` and `~/work/api` can have different notebooks.
+`fastmind project` lists them and says which applies where you are; `fastmind project unset`
+goes back to the usual notebook. The map is `project_notebooks` in `settings.json`.
 
 ## Home
 

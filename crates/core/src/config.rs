@@ -6,8 +6,9 @@
 use crate::model::ModelSettings;
 use crate::{Result, fsx};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -29,6 +30,10 @@ pub struct Settings {
     pub writing: crate::write::WritingSettings,
     /// Notebooks used before, most recent first, for switching between them.
     pub recent_notebooks: Vec<PathBuf>,
+    /// A notebook of its own for some projects: commands run inside the folder on the left,
+    /// and coding agents working there (the MCP server, the SessionEnd hook), use the notebook
+    /// on the right instead of `notebook`.
+    pub project_notebooks: BTreeMap<PathBuf, PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -36,6 +41,27 @@ pub struct Settings {
 pub struct Hotkeys {
     pub capture: String,
     pub remember: String,
+    /// On Hyprland, which leaves global shortcuts' keys to the user, FastMind binds them itself
+    /// while it runs. Off for people who bind them in their own config.
+    pub bind_in_hyprland: bool,
+}
+
+impl Hotkeys {
+    /// A hotkey is an accelerator like "CommandOrControl+Alt+Space": letters, digits and `+`.
+    /// The desktop app writes them into other programs' config (Hyprland's), so nothing else
+    /// may get in.
+    pub fn check(&self) -> std::result::Result<(), String> {
+        for (name, keys) in [("capture", &self.capture), ("remember", &self.remember)] {
+            let fine =
+                keys.len() <= 64 && keys.chars().all(|c| c.is_ascii_alphanumeric() || c == '+');
+            if !fine {
+                return Err(format!(
+                    "the {name} hotkey {keys:?} isn't a key combination (only letters, digits and +)"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -89,6 +115,7 @@ impl Default for Settings {
             ai: crate::sessions::AiSettings::default(),
             writing: crate::write::WritingSettings::default(),
             recent_notebooks: Vec::new(),
+            project_notebooks: BTreeMap::new(),
         }
     }
 }
@@ -98,6 +125,7 @@ impl Default for Hotkeys {
         Self {
             capture: "CommandOrControl+Alt+Space".into(),
             remember: "CommandOrControl+Alt+R".into(),
+            bind_in_hyprland: true,
         }
     }
 }
@@ -178,11 +206,46 @@ impl Settings {
     pub fn notebook_or_default(&self) -> PathBuf {
         self.notebook.clone().unwrap_or_else(default_notebook)
     }
+
+    /// The project notebook for work in `dir`: the one for the innermost project folder that
+    /// holds `dir`, or none when `dir` is in no project.
+    pub fn notebook_for(&self, dir: &Path) -> Option<&PathBuf> {
+        let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let dir = real(dir);
+        self.project_notebooks
+            .iter()
+            .filter(|(project, _)| dir.starts_with(real(project)))
+            .max_by_key(|(project, _)| project.components().count())
+            .map(|(_, notebook)| notebook)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkeys_are_only_key_combinations() {
+        let ok = Hotkeys::default();
+        assert!(ok.check().is_ok());
+        let empty = Hotkeys {
+            capture: String::new(),
+            ..Hotkeys::default()
+        };
+        assert!(empty.check().is_ok());
+        for bad in [
+            "X\")) os.execute(\"id\") --",
+            "Ctrl+Alt+ Space",
+            "Ctrl+Alt+Space\nexec",
+            "Ctrl,Alt",
+        ] {
+            let hotkeys = Hotkeys {
+                capture: bad.into(),
+                ..Hotkeys::default()
+            };
+            assert!(hotkeys.check().is_err(), "{bad:?} got through");
+        }
+    }
 
     #[test]
     fn missing_fields_take_defaults() {
@@ -192,5 +255,31 @@ mod tests {
         assert_eq!(settings.dream.stale_days, 10);
         assert_eq!(settings.dream.done_days, 30);
         assert_eq!(settings.model, ModelSettings::None);
+        assert!(settings.project_notebooks.is_empty());
+    }
+
+    #[test]
+    fn the_innermost_project_picks_the_notebook() {
+        let mut settings = Settings::default();
+        let map = [
+            ("/work", "/notes/work"),
+            ("/work/pz", "/notes/pz"),
+            ("/work/pz-site", "/notes/site"),
+        ];
+        for (project, notebook) in map {
+            settings
+                .project_notebooks
+                .insert(project.into(), notebook.into());
+        }
+        let pick = |dir: &str| settings.notebook_for(Path::new(dir)).cloned();
+        assert_eq!(pick("/work/pz"), Some("/notes/pz".into()));
+        assert_eq!(pick("/work/pz/src/deep"), Some("/notes/pz".into()));
+        assert_eq!(
+            pick("/work/pz-site/x"),
+            Some("/notes/site".into()),
+            "not /work/pz"
+        );
+        assert_eq!(pick("/work/other"), Some("/notes/work".into()));
+        assert_eq!(pick("/elsewhere"), None);
     }
 }

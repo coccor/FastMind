@@ -23,6 +23,7 @@ async function openInEditor(path) {
 }
 
 // ---------- helpers ----------
+fillIcons();
 const $ = (selector) => document.querySelector(selector);
 const esc = (text) =>
   String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -118,7 +119,9 @@ function renderMarkdown(text) {
       if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; }
       const kind = item[1] ? "ol" : "ul";
       if (list !== kind) { if (list) out.push(`</${list}>`); out.push(`<${kind}>`); list = kind; }
-      out.push("<li>" + inline(item[2].replace(/^\[( |x)\]\s*/i, (m, x) => (x.trim() ? "☑ " : "☐ "))) + "</li>");
+      const task = /^\[( |x)\]\s*/i.exec(item[2]);
+      const box = task ? icon(task[1].trim() ? "square-check" : "square") + " " : "";
+      out.push("<li>" + box + inline(task ? item[2].slice(task[0].length) : item[2]) + "</li>");
       continue;
     }
     const quote = /^>\s?(.*)$/.exec(line);
@@ -175,7 +178,7 @@ async function openNotebookMenu() {
       <span class="nb-item-name">${esc(n.name)}${extra}</span><span class="nb-item-path">${esc(n.path)}</span></button>`;
   const kind = { obsidian: "Obsidian vault", fastcapture: "FastCapture notebook", fastmind: "FastMind notebook" };
   notebookMenu.innerHTML = `
-    ${list.current ? `<div class="nb-section">Using now</div><div class="nb-item current"><span class="nb-item-name">✓ ${esc(list.current.name)}</span><span class="nb-item-path">${esc(list.current.path)}</span></div>` : ""}
+    ${list.current ? `<div class="nb-section">Using now</div><div class="nb-item current"><span class="nb-item-name">${icon("check")} ${esc(list.current.name)}</span><span class="nb-item-path">${esc(list.current.path)}</span></div>` : ""}
     ${list.recent.length ? `<div class="nb-section">Recent</div>${list.recent.map((n) => `<div class="nb-row">${item(n, n.exists ? "" : " (missing)")}<button type="button" class="nb-forget" data-forget="${esc(n.path)}" title="Remove from this list" aria-label="Remove ${esc(n.name)} from this list">×</button></div>`).join("")}` : ""}
     ${list.found.length ? `<div class="nb-section">Found on this computer</div>${list.found.map((n) => item(n, ` <span class="muted small">· ${esc(kind[n.kind] || "notes")}, ${n.notes} notes</span>`)).join("")}` : ""}
     <div class="nb-section">Another folder</div>
@@ -253,32 +256,32 @@ async function loadHome() {
   const dream = $("#home-dream");
   const d = home.dream;
   if (!d) {
-    dream.innerHTML = `<div class="home-title">☾ Dream</div><p class="muted">Dream hasn't looked at this notebook yet. Leave FastMind running tonight, or start it now.</p>
+    dream.innerHTML = `<div class="home-title">${icon("moon")} Dream</div><p class="muted">Dream hasn't looked at this notebook yet. Leave FastMind running tonight, or start it now.</p>
       <div class="row gap"><button class="primary" data-go="dream-now">Dream now</button></div>`;
   } else {
     const kinds = Object.entries(d.kinds || {}).map(([k, n]) => `${n} ${({ merge: "to merge", topic: "to gather", archive: "to archive", fixlink: n === 1 ? "link to fix" : "links to fix", pack: "to pack" })[k] || k}`).join(" · ");
-    dream.innerHTML = `<div class="home-title">☾ While you slept <span class="muted small">${esc(ago(d.ran_at))}</span></div>
+    dream.innerHTML = `<div class="home-title">${icon("moon")} While you slept <span class="muted small">${esc(ago(d.ran_at))}</span></div>
       <div class="stats compact"><div class="stat"><div class="num">${d.before}<span class="arrow">→</span>${d.after}</div><div class="label">${d.pending ? "notes, if you accept everything" : "notes after Dream"}</div></div></div>
       <p class="muted">${d.pending ? `${d.pending} proposals waiting: ${esc(kinds)}.` : "Nothing waiting. The notebook is tidy."}${d.applied ? ` ${d.applied} already applied.` : ""}</p>
       <div class="row gap">${d.pending ? `<button class="primary" data-go="dream">Review ${d.pending}</button>` : `<button data-go="dream">See what Dream did</button>`}</div>`;
   }
 
   const inbox = $("#home-inbox");
-  inbox.innerHTML = `<div class="home-title">✎ Fresh memories <span class="muted small">${home.inbox_count ? home.inbox_count + " settling tonight" : ""}</span></div>`
+  inbox.innerHTML = `<div class="home-title">${icon("pencil-line")} Fresh memories <span class="muted small">${home.inbox_count ? home.inbox_count + " settling tonight" : ""}</span></div>`
     + (home.inbox.length
       ? `<ul class="mini">${home.inbox.map((n) => `<li><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a><span class="muted small"> · ${esc(ago(n.captured))}</span></li>`).join("")}</ul>
          <div class="row gap"><button data-go="inbox">See them</button></div>`
       : `<p class="muted">Nothing new. What you capture lands here, and settles overnight.</p>`);
 
   const back = $("#home-resurfaced");
-  back.innerHTML = `<div class="home-title">↺ From your notebook</div>`
+  back.innerHTML = `<div class="home-title">${icon("rotate-ccw")} From your notebook</div>`
     + (home.resurfaced.length
       ? home.resurfaced.map((n) => `<div class="resurfaced"><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a>
           <div class="muted small">${n.age_days} days old · ${esc(n.path)}</div><div class="snippet">${esc(unlink(n.snippet))}</div></div>`).join("")
       : `<p class="muted">Notes come back here once they're a month old, so the good ones don't get lost.</p>`);
 
   const recent = $("#home-recent");
-  recent.innerHTML = `<div class="home-title">◷ Recently</div>`
+  recent.innerHTML = `<div class="home-title">${icon("clock")} Recently</div>`
     + (home.recent.length
       ? `<ul class="mini">${home.recent.map((n) => `<li><a href="#" data-read="${esc(n.path)}">${esc(n.title)}</a>${n.kind === "ai-session" ? ' <span class="pill ai">AI</span>' : ""}<span class="muted small"> · ${esc(ago(n.touched))}</span></li>`).join("")}</ul>`
       : `<p class="muted">Nothing yet.</p>`);
@@ -302,6 +305,7 @@ const clearHomeDraft = keepDraft($("#home-capture-text"), "fastmind.draft.home")
 $("#home-capture").addEventListener("submit", async (event) => {
   event.preventDefault();
   const area = $("#home-capture-text");
+  await homeVoice.finish();
   if (await saveCapture(area.value, homeFiles.files)) { area.value = ""; homeFiles.clear(); clearHomeDraft(); loadHome(); }
 });
 $("#home-capture-text").addEventListener("keydown", (event) => {
@@ -383,7 +387,7 @@ async function readNote(path, archivedId) {
     reader.hidden = false;
     reader._note = note;
     reader.innerHTML = `<div class="reader-head"><h2>${esc(note.title)}</h2>
-        <span class="reader-actions">${note.capture_id ? `<button id="write-note" title="Write the note again from what you captured; History can undo it">${note.written_by ? "Write again" : "Write"}</button><button id="show-original" title="What you captured, as you gave it">Original</button>` : ""}<button id="edit-note" title="Edit (Ctrl+E)">Edit</button><button id="open-editor" title="Open in your editor">Open</button><button id="close-reader" title="Close">✕</button></span></div>
+        <span class="reader-actions">${note.capture_id ? `<button id="write-note" title="Write the note again from what you captured; History can undo it">${note.written_by ? "Write again" : "Write"}</button><button id="show-original" title="What you captured, as you gave it">Original</button>` : ""}<button id="edit-note" title="Edit (Ctrl+E)">Edit</button><button id="open-editor" title="Open in your editor">Open</button><button id="close-reader" title="Close" aria-label="Close">${icon("x")}</button></span></div>
       <div class="muted small">${esc(note.path)}</div>
       ${note.writing ? `<div class="writing-line"><span class="spinner"></span> Being written from what you captured…</div>` : ""}
       <div class="original" id="original" hidden></div>
@@ -556,7 +560,7 @@ async function loadInbox() {
     list.innerHTML = notes
       .map((n, i) => `<li class="card inbox-card${n.writing ? " is-writing" : ""}${(focusedPath ? n.path === focusedPath : i === 0) ? " focused" : ""}" tabindex="0" data-path="${esc(n.path)}">
         <div class="card-head"><div class="grow">
-          <div class="title">${esc(n.title)}${n.written_by ? ` <span class="written" title="Written by ${esc(n.written_by)} from what you captured">✦</span>` : ""}</div>
+          <div class="title">${esc(n.title)}${n.written_by ? ` <span class="written" title="Written by ${esc(n.written_by)} from what you captured">${icon("sparkles")}</span>` : ""}</div>
           ${n.writing ? `<div class="writing-line"><span class="spinner"></span> Writing the note from what you captured…</div>` : ""}
           <div class="reason">${esc(unlink(n.snippet))}</div>
           ${n.write_failed && !n.writing && !n.written_by ? `<div class="write-failed small">Kept as you typed it: ${esc(n.write_failed)} <button class="chip" data-act="write">Try again</button></div>` : ""}
@@ -581,7 +585,7 @@ async function loadHomes(card) {
   try {
     const homes = await call("suggest_homes", { path: card.dataset.path });
     const chip = (h, primary) => `<button class="${primary ? "primary file-best" : "chip"}" data-act="file" data-kind="${esc(h.kind)}" data-target="${esc(h.target)}"
-        title="${h.because.length ? "Beside " + esc(h.because.join(", ")) : ""}">${primary ? "Settle in " : ""}${h.kind === "note" ? "❖ " : "▸ "}${esc(h.label)}</button>`;
+        title="${h.because.length ? "Beside " + esc(h.because.join(", ")) : ""}">${primary ? "Settle in " : ""}${h.kind === "note" ? icon("file-text") : icon("folder")} ${esc(h.label)}</button>`;
     const why = (h) => h.score > 1e30 ? h.because.join(" ") : "Beside " + h.because.join(", ");
     box.innerHTML = (homes.length ? chip(homes[0], true) + homes.slice(1).map((h) => chip(h, false)).join("") : `<span class="muted small">No obvious home yet.</span>`)
       + ` <button class="chip" data-act="other">Other folder…</button>`
@@ -664,7 +668,15 @@ $("#inbox-list").addEventListener("keydown", (event) => {
 });
 
 // ---------- Dream ----------
-const KIND_ICON = { merge: "⧉", topic: "❖", archive: "▤", fix_link: "⛓", pack: "⇲", settle: "↳", diagram: "◇" };
+const KIND_ICON = {
+  merge: icon("git-merge"),
+  topic: icon("layers"),
+  archive: icon("archive"),
+  fix_link: icon("link"),
+  pack: icon("package"),
+  settle: icon("corner-down-right"),
+  diagram: icon("workflow"),
+};
 const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle fresh memories", diagram: "Draw a diagram" };
 
 async function loadDream() {
@@ -711,7 +723,7 @@ function renderDream(report) {
         p.status === "pending"
           ? `${p.preview ? '<button data-act="preview">Preview</button>' : ""}${p.kind === "archive" && p.notes[0].endsWith(".md") ? '<button data-act="pin" title="Pin it: Dream never touches it again">Keep forever</button>' : '<button data-act="reject" title="Dream won’t propose this again">Skip</button>'}<button data-act="apply" class="primary">Accept</button>`
           : p.status === "applied"
-            ? `<span class="status applied">✓ Applied</span><button data-act="undo">Undo</button>`
+            ? `<span class="status applied">${icon("check")} Applied</span><button data-act="undo">Undo</button>`
             : `<span class="status ${p.status}">${p.status === "rejected" ? "Skipped" : "Out of date"}</span>`;
       return `<li class="card ${p.status}" data-id="${esc(p.id)}">
         <div class="card-head">
@@ -823,7 +835,7 @@ async function loadArchive() {
     $("#archive-line").textContent = items.length ? `${items.length} archived · ${bytes(disk_bytes)} on disk` : "";
     $("#archive-list").innerHTML = items.length
       ? items
-          .map((item) => `<li class="card" data-id="${esc(item.id)}"><div class="card-head"><div class="kind ${item.pack ? "pack" : "archive"}">${item.pack ? "⇲" : "▤"}</div>
+          .map((item) => `<li class="card" data-id="${esc(item.id)}"><div class="card-head"><div class="kind ${item.pack ? "pack" : "archive"}">${item.pack ? icon("package") : icon("archive")}</div>
             <div class="grow"><div class="title">${esc(item.title)}${item.pack ? '<span class="pill">packed</span>' : ""}</div>
             <div class="reason">${esc(item.reason)}</div>
             <div class="meta"><span>was ${esc(item.original)}</span><span>archived ${esc(ago(item.archived_at))}</span><span>${bytes(item.size)}</span></div></div>
@@ -884,6 +896,142 @@ $("#history-list").addEventListener("click", async (event) => {
 });
 
 // ---------- Settings ----------
+// ---------- Hotkeys ----------
+// Keys are recorded, not typed: click the button, press the keys. They're stored as accelerators
+// ("CommandOrControl+Alt+Space"), the form the desktop app registers.
+const isMac = navigator.platform.startsWith("Mac");
+
+function keyLabel(accelerator) {
+  if (!accelerator) return "Not set";
+  const names = { CommandOrControl: isMac ? "Cmd" : "Ctrl", Control: "Ctrl", Super: isMac ? "Cmd" : "Super", Alt: isMac ? "Option" : "Alt" };
+  return accelerator.split("+").map((part) => names[part] || part).join(" + ");
+}
+
+const KEY_NAMES = {
+  Space: "Space", Enter: "Enter", Tab: "Tab", Insert: "Insert", Delete: "Delete", Home: "Home", End: "End",
+  PageUp: "PageUp", PageDown: "PageDown", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  Minus: "Minus", Equal: "Equal", Comma: "Comma", Period: "Period", Slash: "Slash", Semicolon: "Semicolon",
+  Quote: "Quote", BracketLeft: "BracketLeft", BracketRight: "BracketRight", Backslash: "Backslash", Backquote: "Backquote",
+};
+
+/** The accelerator for a key press, or null while only modifiers are down. */
+function acceleratorFrom(event) {
+  const code = event.code;
+  let key = /^Key([A-Z])$/.exec(code)?.[1] || /^Digit(\d)$/.exec(code)?.[1] || /^(F\d{1,2})$/.exec(code)?.[1] || KEY_NAMES[code];
+  if (!key) return null;
+  const parts = [];
+  if (isMac ? event.metaKey : event.ctrlKey) parts.push("CommandOrControl");
+  if (isMac && event.ctrlKey) parts.push("Control");
+  if (!isMac && event.metaKey) parts.push("Super");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  // A key on its own would be taken from every app; function keys are the exception.
+  if (!parts.length && !/^F\d/.test(key)) return null;
+  return [...parts, key].join("+");
+}
+
+function showKeys() {
+  const form = $("#settings-form");
+  document.querySelectorAll(".keyrec").forEach((button) => {
+    const value = form[button.dataset.for].value;
+    button.textContent = keyLabel(value);
+    button.classList.toggle("unset", !value);
+  });
+}
+
+let recording = null;
+function stopRecording() {
+  if (!recording) return;
+  window.removeEventListener("keydown", recording.listener, true);
+  recording.button.classList.remove("recording");
+  recording = null;
+  showKeys();
+}
+
+function saveKey(name, value) {
+  const form = $("#settings-form");
+  form[name].value = value;
+  showKeys();
+  form.requestSubmit();
+}
+
+document.querySelectorAll(".keyrec").forEach((button) =>
+  button.addEventListener("click", () => {
+    if (recording?.button === button) return stopRecording();
+    stopRecording();
+    button.classList.add("recording");
+    button.textContent = "Press the keys…";
+    const listener = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.metaKey) return stopRecording();
+      const accelerator = acceleratorFrom(event);
+      if (!accelerator) {
+        const held = [event.ctrlKey && "Ctrl", event.metaKey && (isMac ? "Cmd" : "Super"), event.altKey && (isMac ? "Option" : "Alt"), event.shiftKey && "Shift"].filter(Boolean);
+        button.textContent = held.length ? held.join(" + ") + " + …" : "Press the keys… (with Ctrl, Alt, Shift or Super)";
+        return;
+      }
+      const name = button.dataset.for;
+      stopRecording();
+      saveKey(name, accelerator);
+    };
+    recording = { button, listener };
+    window.addEventListener("keydown", listener, true);
+  }),
+);
+document.querySelectorAll(".keyclear").forEach((button) =>
+  button.addEventListener("click", () => { stopRecording(); saveKey(button.dataset.for, ""); }),
+);
+
+// How the hotkeys are wired. On Wayland the desktop owns global keys: FastMind asks its shortcuts
+// service. Hyprland leaves the keys to the user, so there FastMind binds them itself while it
+// runs, unless that's switched off.
+async function loadHotkeyStatus(status) {
+  const note = $("#hotkey-note");
+  const row = $("#hypr-bind-row");
+  if (!tauri) { note.hidden = row.hidden = true; return; }
+  status = status || (await tauri.core.invoke("hotkey_status").catch(() => null));
+  const command = "<code>fastmind-desktop --capture</code> (or <code>--remember</code>)";
+  const parts = [];
+  const hypr = status?.hyprland;
+  row.hidden = !hypr;
+  if (status?.how === "native") {
+    for (const problem of status.problems || []) parts.push(`<p class="bad">${esc(problem)}</p>`);
+  } else if (status?.how === "portal" && hypr) {
+    if (hypr.off) {
+      parts.push(`<p>FastMind registered its shortcuts with Hyprland; bind keys to them in your config with <code>hl.dsp.global("dev.coccor.fastmind:capture")</code> (and <code>:remember</code>).</p>`);
+    } else {
+      for (const taken of hypr.conflicts || []) parts.push(`<p class="bad">${esc(taken)} in Hyprland, so FastMind left it alone: pick another key here.</p>`);
+      for (const problem of hypr.problems || []) parts.push(`<p class="bad">${esc(problem)}</p>`);
+      if (hypr.active) parts.push(`<p>${icon("check")} Bound in Hyprland while FastMind runs. Nothing is written to your Hyprland config.</p>`);
+    }
+  } else if (status?.how === "portal") {
+    const keys = (status.bound || []).map((b) => `${esc(b.id)}: ${esc(b.trigger || "not set yet")}`).join(" · ");
+    parts.push(`<p>Your desktop owns global keys: FastMind asked it for these${keys ? ` (${keys})` : ""}.</p>`);
+    if (status.can_configure) parts.push(`<div class="actions"><button type="button" data-hotkeys="configure">Change in the desktop's settings…</button></div>`);
+  } else if (status?.how === "none") {
+    parts.push(`<p>This desktop has no global shortcuts service, so FastMind can't set the keys itself. Bind a key in your desktop's settings to run ${command}.</p>`);
+  }
+  if (parts.length && status?.how !== "native") parts.push(`<p class="muted">Any key binding can also run ${command}.</p>`);
+  note.innerHTML = parts.join("");
+  note.hidden = !parts.length;
+}
+
+$("#settings-form").bind_in_hyprland.addEventListener("change", () => $("#settings-form").requestSubmit());
+
+$("#hotkey-note").addEventListener("click", async (event) => {
+  const button = event.target.closest('button[data-hotkeys="configure"]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await tauri.core.invoke("hotkeys_configure");
+  } catch (error) {
+    toast(String(error.message || error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 async function loadSettings() {
   try {
     const { settings, file } = await call("settings_get");
@@ -893,6 +1041,9 @@ async function loadSettings() {
     form.inbox.value = settings.inbox;
     form.hotkey_capture.value = settings.hotkeys.capture;
     form.hotkey_remember.value = settings.hotkeys.remember;
+    form.bind_in_hyprland.checked = settings.hotkeys.bind_in_hyprland !== false;
+    showKeys();
+    loadHotkeyStatus();
     form.autostart.checked = !!settings.autostart;
     const d = settings.dream;
     form.nightly.checked = d.nightly;
@@ -934,7 +1085,11 @@ $("#settings-form").addEventListener("submit", async (event) => {
   const s = structuredClone(form._settings);
   s.notebook = form.notebook.value.trim() || null;
   s.inbox = form.inbox.value.trim() || "inbox";
-  s.hotkeys = { capture: form.hotkey_capture.value.trim(), remember: form.hotkey_remember.value.trim() };
+  s.hotkeys = {
+    capture: form.hotkey_capture.value.trim(),
+    remember: form.hotkey_remember.value.trim(),
+    bind_in_hyprland: form.bind_in_hyprland.checked,
+  };
   s.autostart = form.autostart.checked;
   Object.assign(s.dream, {
     nightly: form.nightly.checked,
@@ -1089,12 +1244,174 @@ $("#make-demo").addEventListener("click", async () => {
 const MAX_FILE = 50 * 1024 * 1024;
 
 // A capture box that takes pasted screenshots and dropped files, shown as chips under it.
+// A microphone button: click it, or hold Space, and talk. The words appear in the box as you
+// speak, with a bar that moves with your voice; let go (or click again) to finish. The recording
+// and the speech-to-text both happen in the app, on this computer.
+function voiceButton(button, area) {
+  if (!tauri || !button) return { cancel() {}, finish: async () => {} };
+  button.hidden = false;
+  const meter = document.createElement("span");
+  meter.className = "meter";
+  meter.hidden = true;
+  meter.innerHTML = "<i></i>";
+  button.before(meter);
+  const bar = meter.firstChild;
+  // What the app is doing, always in view: "Listening", "Finishing…", "Polishing…".
+  const status = document.createElement("span");
+  status.className = "voice-status";
+  status.hidden = true;
+  button.before(status);
+  const say = (text) => { status.hidden = !text; status.textContent = text; };
+  // idle -> starting -> listening -> working (the model finishing the last words) -> idle
+  let state = "idle";
+  let held = false;       // started by holding Space: letting go ends it
+  let released = false;   // let go before the microphone was ready
+  let anchor = null;      // the text around the spot where the words go
+  let before = null;      // the box as it was when Space went down
+
+  const set = (next) => {
+    state = next;
+    button.classList.toggle("listening", next === "listening");
+    button.classList.toggle("working", next === "working" || next === "starting");
+    meter.hidden = next !== "listening";
+    area.readOnly = next === "listening" || next === "working";
+    if (next !== "listening") bar.style.transform = "scaleX(0)";
+    const words = { starting: "Starting…", listening: "Listening", working: "Finishing…" }[next] || "";
+    if (next !== "idle") say(words);
+    else say("");
+  };
+  const render = (text) => {
+    const gap = text && anchor.before && !/\s$/.test(anchor.before) ? " " : "";
+    const value = anchor.before + gap + text;
+    area.value = value + anchor.after;
+    area.selectionStart = area.selectionEnd = value.length;
+    area.scrollTop = area.scrollHeight;
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const restore = () => { if (anchor) render(""); };
+
+  const start = async () => {
+    if (state !== "idle") return;
+    set("starting");
+    released = false;
+    const at = area.selectionEnd ?? area.value.length;
+    anchor = { before: area.value.slice(0, at), after: area.value.slice(at) };
+    try {
+      await tauri.core.invoke("voice_start");
+    } catch (error) {
+      set("idle"); held = false;
+      toast(String(error), true);
+      return;
+    }
+    set("listening");
+    if (released) stop();
+  };
+  const stop = async () => {
+    if (state === "starting") { released = true; return; }
+    if (state !== "listening") return;
+    set("working");
+    held = false;
+    try {
+      const text = await tauri.core.invoke("voice_stop");
+      if (text) { render(text + (anchor.after && /^\s/.test(anchor.after) ? "" : " ")); } else { restore(); toast("Didn't catch anything."); }
+    } catch (error) {
+      restore();
+      toast(String(error), true);
+    }
+    set("idle");
+    area.focus();
+  };
+  const cancel = () => {
+    if (state !== "listening" && state !== "starting") return;
+    tauri.core.invoke("voice_cancel").catch(() => {});
+    restore();
+    set("idle"); held = false;
+  };
+
+  button.addEventListener("click", () => { if (state === "idle") start(); else stop(); });
+
+  // Hold Space: the first press types a space as usual. If the key is still down a moment
+  // later, the space (and any repeats of it) is taken back and the recording begins. This
+  // doesn't depend on `event.repeat`, which the Linux webview doesn't set.
+  const HOLD_MS = 280;
+  let holdTimer = null;
+  let spaceDown = false;
+  let quietUntil = 0;   // Space held while the window opens (the capture key has Space in it) isn't a request
+  const arm = () => {
+    quietUntil = Date.now() + 250;
+    tauri.core.invoke("voice_warm").catch(() => {});   // load the model while the hand finds Space
+  };
+  area.addEventListener("focus", arm);
+  if (tauri) tauri.event.listen("capture-shown", arm);
+  const trigger = () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (!spaceDown || !before || state !== "idle") return;
+    area.value = before.value;   // take back the spaces the hold typed
+    area.selectionStart = before.start;
+    area.selectionEnd = before.end;
+    held = true;
+    start();
+  };
+  const disarm = () => { clearTimeout(holdTimer); holdTimer = null; spaceDown = false; };
+  const isSpace = (event) => event.code === "Space" || event.key === " ";
+  let releaseTimer = null;
+  area.addEventListener("keydown", (event) => {
+    if (!isSpace(event) || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Some systems report a held key as release + press, again and again: a release followed
+    // at once by another press is the same hold.
+    clearTimeout(releaseTimer);
+    if (state !== "idle") { event.preventDefault(); return; }
+    if (spaceDown) {   // a second Space with no letting go between: the key is held
+      event.preventDefault();
+      trigger();
+      return;
+    }
+    spaceDown = true;
+    if (Date.now() < quietUntil) { before = null; return; }
+    before = { value: area.value, start: area.selectionStart, end: area.selectionEnd };
+    holdTimer = setTimeout(trigger, HOLD_MS);   // in case the key doesn't repeat
+  });
+  area.addEventListener("keyup", (event) => {
+    if (!isSpace(event)) return;
+    event.preventDefault();
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => {
+      const wasHeld = held;
+      disarm();
+      if (wasHeld) stop();
+    }, 200);
+  });
+  area.addEventListener("blur", () => { disarm(); if (held) stop(); });
+
+  tauri.event.listen("voice-level", (event) => {
+    if (state === "listening") bar.style.transform = `scaleX(${Math.max(0.04, Number(event.payload))})`;
+  });
+  tauri.event.listen("voice-partial", (event) => {
+    if (state === "listening" && event.payload) render(String(event.payload));
+  });
+  // Ctrl+Enter while still talking: let the last words land before saving.
+  const finish = async () => {
+    while (state === "starting" || state === "working") await new Promise((r) => setTimeout(r, 30));
+    if (state === "listening") await stop();
+  };
+  return { cancel, finish };
+}
+// The first-time download shows in the status label of whichever microphone is in use.
+tauri?.event.listen("voice-model-progress", (event) => {
+  document.querySelectorAll(".voice-status").forEach((label) => {
+    if (label.hidden) return;
+    label.textContent = event.payload < 100 ? `Downloading the speech model… ${event.payload}%` : label.textContent;
+  });
+});
+tauri?.event.listen("voice-model-error", (event) => toast(String(event.payload), true));
+
 function attachable(area, chips) {
   const files = [];
   const render = () => {
     chips.hidden = !files.length;
     chips.innerHTML = files
-      .map((f, i) => `<span class="attach">${/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name) ? "🖼" : "📎"} ${esc(f.name)} <button type="button" title="Remove" data-i="${i}">✕</button></span>`)
+      .map((f, i) => `<span class="attach">${/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name) ? icon("image") : icon("paperclip")} ${esc(f.name)} <button type="button" title="Remove" aria-label="Remove" data-i="${i}">${icon("x")}</button></span>`)
       .join("");
   };
   const add = (file) => {
@@ -1129,7 +1446,13 @@ function attachable(area, chips) {
 
 // What you typed in a capture box survives closing it: Esc keeps a draft for next time.
 function keepDraft(area, key) {
-  try { area.value = localStorage.getItem(key) || area.value; } catch {}
+  // Speech-to-text once saved "[BLANK_AUDIO]" as a draft: never bring those back.
+  const clean = (text) => text.replace(/\[BLANK[ _]AUDIO\]/gi, "");
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved !== null && !clean(saved).trim()) localStorage.removeItem(key);
+    else if (saved) area.value = clean(saved);
+  } catch {}
   area.addEventListener("input", () => { try { localStorage.setItem(key, area.value); } catch {} });
   return () => { try { localStorage.removeItem(key); } catch {} };
 }
@@ -1151,6 +1474,9 @@ async function saveCapture(text, files = []) {
 }
 
 const dialogFiles = attachable($("#capture-text"), $("#capture-files"));
+const dialogVoice = voiceButton($("#capture-mic"), $("#capture-text"));
+const homeVoice = voiceButton($("#home-mic"), $("#home-capture-text"));
+$("#capture-dialog").addEventListener("close", () => dialogVoice.cancel());
 const clearDialogDraft = keepDraft($("#capture-text"), "fastmind.draft.dialog");
 
 function openCapture() {
@@ -1162,6 +1488,7 @@ $("#capture-open").addEventListener("click", openCapture);
 $("#capture-cancel").addEventListener("click", () => $("#capture-dialog").close());
 $("#capture-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  await dialogVoice.finish();
   if (await saveCapture($("#capture-text").value, dialogFiles.files)) {
     $("#capture-text").value = "";
     dialogFiles.clear();
@@ -1221,6 +1548,7 @@ function startMain() {
     tauri.event.listen("focus-remember", () => { show("remember"); $("#query").select(); });
     tauri.event.listen("show-view", (event) => show(event.payload));
     tauri.event.listen("changed", () => { refreshStatus(); show(current); });
+    tauri.event.listen("hotkeys-changed", () => { if (current === "settings") loadHotkeyStatus(); });
   }
 }
 
@@ -1229,11 +1557,13 @@ function startCaptureOnly() {
   const area = $("#capture-text-mini");
   const files = attachable(area, $("#capture-files-mini"));
   const clearDraft = keepDraft(area, "fastmind.draft.window");
-  const close = () => (tauri ? tauri.core.invoke("hide_capture") : window.close());
+  const voice = voiceButton($("#capture-mic-mini"), area);
+  const close = () => { voice.cancel(); return tauri ? tauri.core.invoke("hide_capture") : window.close(); };
   $("#capture-close-mini").addEventListener("click", () => close());
   area.focus();
   $("#capture-form-mini").addEventListener("submit", async (event) => {
     event.preventDefault();
+    await voice.finish();
     if (await saveCapture(area.value, files.files)) {
       area.value = "";
       files.clear();
@@ -1245,7 +1575,84 @@ function startCaptureOnly() {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $("#capture-form-mini").requestSubmit(); }
     if (event.key === "Escape") { event.preventDefault(); close(); }
   });
-  if (tauri) tauri.event.listen("capture-shown", () => setTimeout(() => area.focus(), 30));
+  const notebooks = captureNotebookPicker(area);
+  if (tauri) {
+    tauri.event.listen("capture-shown", () => { notebooks.close(); notebooks.refresh(); setTimeout(() => area.focus(), 30); });
+    // The main window switched notebooks: show where the next capture goes.
+    tauri.event.listen("changed", () => notebooks.refresh());
+  }
+}
+
+// The capture window's notebook: its name in the title, and a menu to change it there.
+// Changing it switches FastMind's notebook, the same as the switcher in the main window.
+function captureNotebookPicker(area) {
+  const button = $("#capture-nb");
+  const menu = $("#capture-nb-menu");
+  const refresh = async () => {
+    try {
+      const status = await call("status");
+      $("#capture-nb-name").textContent = String(status.notebook).split(/[\\/]/).filter(Boolean).pop() || String(status.notebook);
+      button.title = `Saving to ${status.notebook}\nChange notebook`;
+    } catch {
+      $("#capture-nb-name").textContent = "No notebook";
+      button.title = "Choose a notebook";
+    }
+  };
+  const close = () => { menu.hidden = true; button.setAttribute("aria-expanded", "false"); };
+  const open = async () => {
+    let list;
+    try { list = await call("notebooks"); } catch (error) { toast(String(error.message || error), true); return; }
+    const item = (n, current = false) => `<button type="button" role="menuitem" class="nb-item${current ? " current" : ""}" data-path="${esc(n.path)}"${n.exists === false ? " disabled" : ""}>
+        <span class="nb-item-name">${current ? icon("check") + " " : ""}${esc(n.name)}${n.exists === false ? " (missing)" : ""}</span><span class="nb-item-path">${esc(n.path)}</span></button>`;
+    menu.innerHTML = `
+      ${list.current ? item(list.current, true) : ""}
+      ${list.recent.map((n) => item(n)).join("")}
+      ${list.found.length ? `<div class="nb-section">Found on this computer</div>${list.found.map((n) => item(n)).join("")}` : ""}
+      ${tauri ? `<div class="nb-actions"><button type="button" data-nb="open">Open a folder…</button></div>` : ""}`;
+    menu.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    (menu.querySelector(".nb-item:not(.current):not(:disabled)") || menu.querySelector(".nb-item"))?.focus();
+  };
+  const choose = async (path) => {
+    close();
+    try {
+      await call("notebook_switch", { path });
+      await refresh();
+    } catch (error) {
+      toast(String(error.message || error), true);
+    }
+    area.focus();
+  };
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (menu.hidden) open(); else { close(); area.focus(); }
+  });
+  menu.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (event.target.closest("[data-nb]")) {
+      close();
+      const folder = await tauri.core.invoke("pick_folder").catch(() => null);
+      if (folder) choose(folder); else area.focus();
+      return;
+    }
+    const pick = event.target.closest(".nb-item[data-path]");
+    if (!pick) return;
+    if (pick.classList.contains("current")) { close(); area.focus(); return; }
+    choose(pick.dataset.path);
+  });
+  menu.addEventListener("keydown", (event) => {
+    // Esc closes only the menu, not the window; arrows move through the notebooks.
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); button.focus(); return; }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const items = [...menu.querySelectorAll("button:not(:disabled)")];
+      const at = items.indexOf(document.activeElement);
+      items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+    }
+  });
+  document.addEventListener("click", () => { if (!menu.hidden) close(); });
+  refresh();
+  return { refresh, close };
 }
 
 // First run: choose where the notes live before anything touches the disk.
@@ -1281,7 +1688,7 @@ async function startWelcome(first) {
     box.innerHTML = `<span class="spinner"></span> Checking ${esc(model.name)}…`;
     try {
       const { ms } = await call("model_check", { model: chosenModel() });
-      box.textContent = `✓ ${model.name} answered in ${(ms / 1000).toFixed(1)} s.`;
+      box.innerHTML = `${icon("check")} ${esc(model.name)} answered in ${(ms / 1000).toFixed(1)} s.`;
       return true;
     } catch (error) {
       box.textContent = `${model.name} didn't answer: ${error.message || error}`;

@@ -15,8 +15,8 @@
         "title": "FastMind",
         "width": 1180,
         "height": 800,
-        "minWidth": 720,
-        "minHeight": 480,
+        "minWidth": 320,
+        "minHeight": 400,
         "visible": false,
         "center": true,
         "dragDropEnabled": false
@@ -32,6 +32,7 @@
     "category": "Productivity",
     "shortDescription": "Capture, remember and dream over a plain Markdown notebook.",
     "icon": [
+      "icons/icon.png",
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
