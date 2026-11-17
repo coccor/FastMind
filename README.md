@@ -27,7 +27,7 @@ Plain Markdown files on Windows, macOS and Linux.
 | | |
 |---|---|
 | ⚡ **One key to keep it** | A box opens over whatever you're doing; **Ctrl+Enter** and you're back. The AI writes it up as a finished note. |
-| 🌙 **It tidies itself** | At night Dream merges copies, gathers fragments and archives what nothing uses. It proposes; you accept. |
+| 🌙 **It tidies itself** | At night Dream merges copies, gathers fragments, archives what nothing uses and draws diagrams for notes that describe a flow. It proposes; you accept. |
 | ↶ **Nothing is lost** | Nothing is deleted, every change goes through a journal, and every change can be undone. |
 | 🧠 **Memory for your agents** | Claude Code and Codex search your notes before they dig in, and save what they learn. |
 | 📄 **Plain Markdown** | Your notes stay `.md` files, readable by Obsidian, [FastPad](https://github.com/coccor/FastPad) or any editor. No database, no account. |

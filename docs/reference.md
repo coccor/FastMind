@@ -94,3 +94,14 @@ Settings live in `settings.json` in your config folder:
 | Linux | `~/.config/fastmind` |
 
 `FASTMIND_CONFIG` points elsewhere, for example a scratch file while you try the demo.
+
+### Dream
+
+| Setting | Default | |
+|---|---|---|
+| `dream.model_requests` | 20 | Most questions to the AI in one night |
+| `dream.diagram_notes` | 3 | Existing notes Dream asks about a diagram each night; `0` turns diagrams off and reserves nothing. While on, 3 of `model_requests` are kept for diagrams. |
+| `dream.auto_apply` | `settle`, `pack` | Kinds applied without asking: `settle`, `pack`, `fix_link`, `archive`, `merge`, `topic`, `diagram`. A diagram is never in the default. |
+
+`fastmind dream apply all` and `dream reject` work on diagram proposals like any other kind
+(`diagram`).

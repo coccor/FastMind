@@ -6,6 +6,7 @@ pub mod archive;
 pub mod capture;
 pub mod config;
 pub mod demo;
+pub mod diagram;
 pub mod dream;
 pub mod filing;
 pub mod frontmatter;

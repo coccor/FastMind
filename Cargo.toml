@@ -18,6 +18,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq = { version = "2", features = ["json"] }
 directories = "6"
 tempfile = "3"
+fastdraw-render = { git = "https://github.com/coccor/fastdraw", rev = "f0d3905" }
 
 [profile.release]
 opt-level = 3

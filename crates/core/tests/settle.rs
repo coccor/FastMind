@@ -197,3 +197,257 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
             .contains("Invoices batch")
     );
 }
+
+#[test]
+fn settled_note_keeps_its_diagram() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "Fresh memories/Flow.md",
+        "---\nstatus: inbox\n---\n# Flow\n\n![d](attachments/x%20y.fdraw)\n",
+        1,
+    );
+    write(&nb, "Fresh memories/attachments/x y.fdraw", "box A\n", 1);
+    let target =
+        fastmind_core::filing::file(&nb, "Fresh memories/Flow.md", Some("work"), None).unwrap();
+    assert_eq!(target, "work/Flow.md");
+    // The link resolves the way the reader resolves it: beside the note, in attachments/.
+    assert!(
+        nb.exists("work/attachments/x y.fdraw"),
+        "the diagram moved with its note"
+    );
+    assert!(
+        fs::read_to_string(nb.root.join(&target))
+            .unwrap()
+            .contains("attachments/x%20y.fdraw")
+    );
+    assert!(
+        !nb.exists("Fresh memories/attachments/x y.fdraw"),
+        "and left nothing behind"
+    );
+    // Undo puts everything back.
+    let entry = journal::history(&nb).into_iter().next().unwrap();
+    journal::undo(&nb, &entry.id).unwrap();
+    assert!(nb.exists("Fresh memories/attachments/x y.fdraw"));
+    assert!(!nb.exists("work/attachments/x y.fdraw"));
+}
+
+fn inbox_note(nb: &Notebook, name: &str, body: &str) {
+    write(
+        nb,
+        &format!("Fresh memories/{name}.md"),
+        &format!("---\nstatus: inbox\n---\n# {name}\n\n{body}\n"),
+        1,
+    );
+}
+
+fn read(nb: &Notebook, rel: &str) -> String {
+    fs::read_to_string(nb.root.join(rel)).unwrap()
+}
+
+#[test]
+fn shared_attachment_is_copied_and_the_original_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    inbox_note(&nb, "A", "![p](attachments/logo.png)");
+    inbox_note(&nb, "B", "![p](attachments/logo.png)");
+    inbox_note(&nb, "C", "![[logo.png]]");
+    write(&nb, "Fresh memories/attachments/logo.png", "PNG", 1);
+    fastmind_core::filing::file(&nb, "Fresh memories/A.md", Some("work"), None).unwrap();
+    assert_eq!(read(&nb, "work/attachments/logo.png"), "PNG");
+    assert!(
+        nb.exists("Fresh memories/attachments/logo.png"),
+        "B still shows it"
+    );
+    assert!(read(&nb, "work/A.md").contains("![p](attachments/logo.png)"));
+    // C shows it by an embed, which also resolves beside the note.
+    fastmind_core::filing::file(&nb, "Fresh memories/B.md", Some("work"), None).unwrap();
+    assert!(
+        nb.exists("Fresh memories/attachments/logo.png"),
+        "the embed in C still shows it"
+    );
+    fastmind_core::filing::file(&nb, "Fresh memories/C.md", Some("kitchen"), None).unwrap();
+    assert!(nb.exists("kitchen/attachments/logo.png"));
+    assert!(
+        !nb.exists("Fresh memories/attachments/logo.png"),
+        "nobody shows it there now"
+    );
+}
+
+#[test]
+fn embed_shared_with_a_note_that_stays_keeps_the_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    inbox_note(&nb, "A", "![p](attachments/logo.png)");
+    inbox_note(&nb, "Stay", "![[logo.png]]");
+    write(&nb, "Fresh memories/attachments/logo.png", "PNG", 1);
+    fastmind_core::filing::file(&nb, "Fresh memories/A.md", Some("work"), None).unwrap();
+    assert!(nb.exists("Fresh memories/attachments/logo.png"));
+    assert!(nb.exists("work/attachments/logo.png"));
+}
+
+#[test]
+fn name_collision_in_the_destination_gets_a_free_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    inbox_note(&nb, "A", "![p](attachments/logo.png) ![[logo.png]]");
+    write(&nb, "Fresh memories/attachments/logo.png", "NEW", 1);
+    write(&nb, "work/attachments/logo.png", "OLD", 1);
+    fastmind_core::filing::file(&nb, "Fresh memories/A.md", Some("work"), None).unwrap();
+    assert_eq!(read(&nb, "work/attachments/logo.png"), "OLD");
+    assert_eq!(read(&nb, "work/attachments/logo 2.png"), "NEW");
+    assert!(read(&nb, "work/A.md").contains("![p](attachments/logo%202.png)"));
+}
+
+#[test]
+fn attachments_follow_to_and_from_the_notebook_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    inbox_note(&nb, "A", "![d](attachments/Redis%20%28x%29.fdraw)");
+    write(
+        &nb,
+        "Fresh memories/attachments/Redis (x).fdraw",
+        "box A\n",
+        1,
+    );
+    fastmind_core::filing::file(&nb, "Fresh memories/A.md", Some(""), None).unwrap();
+    assert!(nb.exists("attachments/Redis (x).fdraw"));
+    assert!(read(&nb, "A.md").contains("![d](attachments/Redis%20%28x%29.fdraw)"));
+    fastmind_core::filing::file(&nb, "A.md", Some("work"), None).unwrap();
+    assert!(nb.exists("work/attachments/Redis (x).fdraw"));
+    assert!(!nb.exists("attachments/Redis (x).fdraw"));
+}
+
+#[test]
+fn only_the_notes_own_attachments_are_carried() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "Fresh memories/sub/N.md",
+        "---\nstatus: inbox\n---\n# N\n\n![a](../shared/attachments/l.png) ![b](myattachments/m.png)\n",
+        1,
+    );
+    write(&nb, "Fresh memories/shared/attachments/l.png", "L", 1);
+    write(&nb, "Fresh memories/sub/myattachments/m.png", "M", 1);
+    fastmind_core::filing::file(&nb, "Fresh memories/sub/N.md", Some("work"), None).unwrap();
+    assert!(nb.exists("Fresh memories/shared/attachments/l.png"));
+    assert!(nb.exists("Fresh memories/sub/myattachments/m.png"));
+    assert!(!nb.exists("work/attachments/l.png") && !nb.exists("work/attachments/m.png"));
+}
+
+#[test]
+fn settling_notes_that_share_an_attachment_in_one_change_keeps_it_valid_and_undoes() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    let old = 24 * 30;
+    write(
+        &nb,
+        "kitchen/Bread.md",
+        "# Bread\n\nSourdough starter flour water.\n",
+        old,
+    );
+    for name in ["Starter feeding", "Starter rye"] {
+        write(
+            &nb,
+            &format!("Fresh memories/{name}.md"),
+            &format!(
+                "---\nstatus: inbox\n---\n# {name}\n\nSourdough starter flour water, feed daily.\n\n![s](attachments/jar.png)\n"
+            ),
+            24 * 2,
+        );
+    }
+    write(&nb, "Fresh memories/attachments/jar.png", "PNG", 24 * 2);
+    let plan = dream::Plan::Settle {
+        folder: Some("kitchen".into()),
+        home: None,
+        paths: vec![
+            "Fresh memories/Starter feeding.md".into(),
+            "Fresh memories/Starter rye.md".into(),
+        ],
+    };
+    let proposal = dream::Proposal {
+        id: "s1".into(),
+        kind: Kind::Settle,
+        title: "Settle".into(),
+        reason: "t".into(),
+        notes: vec![],
+        notes_removed: 0,
+        bytes_freed: 0,
+        disk_freed: 0,
+        preview: None,
+        status: dream::Status::Pending,
+        entry: None,
+        error: None,
+        plan,
+        sources: vec![],
+    };
+    let report = dream::Report {
+        id: "r".into(),
+        ran_at: Local::now(),
+        took_ms: 0,
+        before: Default::default(),
+        proposals: vec![proposal],
+        model: None,
+        model_notes: vec![],
+        summary: String::new(),
+    };
+    dream::save_report(&nb, &report).unwrap();
+    let done = dream::apply(&nb, "s1", Local::now()).unwrap();
+    assert_eq!(done.status, dream::Status::Applied, "{:?}", done.error);
+    for name in ["Starter feeding", "Starter rye"] {
+        assert!(read(&nb, &format!("kitchen/{name}.md")).contains("![s](attachments/"));
+    }
+    let files: Vec<String> = fs::read_dir(nb.root.join("kitchen/attachments"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(files.contains(&"jar.png".to_owned()), "{files:?}");
+    for name in ["Starter feeding", "Starter rye"] {
+        let text = read(&nb, &format!("kitchen/{name}.md"));
+        let link = text
+            .split("](")
+            .nth(1)
+            .unwrap()
+            .split(')')
+            .next()
+            .unwrap()
+            .to_owned();
+        let target =
+            fastmind_core::links::relative_target_path(&format!("kitchen/{name}.md"), &link);
+        assert!(nb.exists(&target), "{link} -> {target}");
+    }
+    dream::undo(&nb, "s1").unwrap();
+    assert!(nb.exists("Fresh memories/attachments/jar.png"));
+    assert!(!nb.exists("kitchen/attachments/jar.png"));
+    assert!(
+        nb.exists("Fresh memories/Starter feeding.md")
+            && nb.exists("Fresh memories/Starter rye.md")
+    );
+}
+
+#[test]
+fn a_collision_rewrites_only_the_moved_files_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    inbox_note(
+        &nb,
+        "A",
+        "![p](attachments/x.png) [b](attachments/x.png.bak) ![t](attachments/x.png \"T\")\n![[logo.png]] ![[logo.png2]] ![[logo.png|40]]",
+    );
+    write(&nb, "Fresh memories/attachments/x.png", "NEW", 1);
+    write(&nb, "Fresh memories/attachments/logo.png", "NEW", 1);
+    write(&nb, "work/attachments/x.png", "OLD", 1);
+    write(&nb, "work/attachments/logo.png", "OLD", 1);
+    fastmind_core::filing::file(&nb, "Fresh memories/A.md", Some("work"), None).unwrap();
+    let text = read(&nb, "work/A.md");
+    assert!(
+        text.contains("![p](attachments/x%202.png) [b](attachments/x.png.bak) ![t](attachments/x%202.png \"T\")"),
+        "{text}"
+    );
+    assert!(
+        text.contains("![[logo 2.png]] ![[logo.png2]] ![[logo 2.png|40]]"),
+        "{text}"
+    );
+}

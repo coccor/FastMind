@@ -87,6 +87,19 @@ fn arg<T: for<'de> Deserialize<'de>>(args: &Value, key: &str) -> Result<T> {
         .map_err(|_| Error::msg(format!("missing or bad argument: {key}")))
 }
 
+/// A diagram as an image data URL, or its errors, one per line, joined by "; ".
+fn diagram_data(text: &str, file: Option<&std::path::Path>, dark: bool) -> Result<Value> {
+    let drawn = crate::diagram::draw(text, file, dark);
+    if !drawn.errors.is_empty() {
+        return Err(Error::msg(drawn.errors.join("; ")));
+    }
+    let data = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        drawn.svg.as_bytes(),
+    );
+    Ok(json!({ "data": format!("data:image/svg+xml;base64,{data}") }))
+}
+
 impl App {
     /// An app that saves settings changes to the settings file.
     pub fn new(settings: Settings) -> Self {
@@ -363,6 +376,17 @@ impl App {
                 // An image inside the notebook, for showing in a note. Nothing else is served.
                 let path: String = arg(&args, "path")?;
                 let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                if ext == "fdraw" {
+                    use std::io::Read;
+                    let file = nb.path(&path)?;
+                    let dark: bool = arg(&args, "dark").unwrap_or(false);
+                    let mut bytes = Vec::new();
+                    std::fs::File::open(&file)?
+                        .take(crate::diagram::MAX_BYTES as u64 + 1)
+                        .read_to_end(&mut bytes)?;
+                    let text = String::from_utf8_lossy(&bytes);
+                    return diagram_data(&text, Some(&file), dark);
+                }
                 let mime = match ext.as_str() {
                     "png" => "image/png",
                     "jpg" | "jpeg" => "image/jpeg",
@@ -381,6 +405,11 @@ impl App {
                 let data =
                     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
                 json!({ "data": format!("data:{mime};base64,{data}") })
+            }
+            "diagram_draw" => {
+                let text: String = arg(&args, "text")?;
+                let dark: bool = arg(&args, "dark").unwrap_or(false);
+                return diagram_data(&text, None, dark);
             }
             "suggest_homes" => {
                 let path: String = arg(&args, "path")?;

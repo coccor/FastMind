@@ -85,7 +85,7 @@ function renderMarkdown(text) {
     esc(line)
       .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, src) =>
         /^https?:/.test(src) ? `<span class="muted">[image: ${alt}]</span>` : `<img class="note-image" alt="${alt}" data-src="${src}">`)
-      .replace(/!\[\[([^\]|]+\.(?:png|jpe?g|gif|webp|bmp|svg))(?:\|[^\]]*)?\]\]/gi, (_, src) => `<img class="note-image" alt="${src}" data-src="${src}" data-wiki="1">`)
+      .replace(/!\[\[([^\]|]+\.(?:png|jpe?g|gif|webp|bmp|svg|fdraw))(?:\|[^\]]*)?\]\]/gi, (_, src) => `<img class="note-image" alt="${src}" data-src="${src}" data-wiki="1">`)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
@@ -452,22 +452,38 @@ async function showOriginal(path) {
 }
 
 // Images in a note load through FastMind (the page can't read local files itself).
-function loadImages(root, notePath) {
+function loadImages(root, notePath, diagrams = {}) {
   const folder = notePath.includes("/") ? notePath.slice(0, notePath.lastIndexOf("/") + 1) : "";
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   root.querySelectorAll("img.note-image[data-src]").forEach(async (img) => {
     let src = decodeURIComponent(img.dataset.src);
+    const isDiagram = /\.fdraw$/i.test(src);
+    const failed = (text) => img.replaceWith(Object.assign(document.createElement("span"), { className: "muted", textContent: text }));
+    if (isDiagram && Object.prototype.hasOwnProperty.call(diagrams, src)) {
+      try {
+        const { data } = await call("diagram_draw", { text: diagrams[src], dark });
+        img.src = data;
+      } catch (error) {
+        failed(`[diagram: ${String(error.message || error)}]`);
+      }
+      return;
+    }
     const parts = (folder + src).split("/");
     const out = [];
     for (const part of parts) { if (part === "..") out.pop(); else if (part && part !== ".") out.push(part); }
     const candidates = [out.join("/"), folder + "attachments/" + src.split("/").pop()];
+    let last = "";
     for (const path of candidates) {
       try {
-        const { data } = await call("image", { path });
+        const { data } = await call("image", { path, dark });
         img.src = data;
         return;
-      } catch {}
+      } catch (error) {
+        const message = String(error.message || error);
+        if (/^Line \d|diagram/.test(message)) last = message;
+      }
     }
-    img.replaceWith(Object.assign(document.createElement("span"), { className: "muted", textContent: `[missing image: ${src}]` }));
+    failed(isDiagram && /^Line \d|diagram/.test(last) ? `[diagram: ${last}]` : `[missing image: ${src}]`);
   });
 }
 
@@ -659,8 +675,9 @@ const KIND_ICON = {
   fix_link: icon("link"),
   pack: icon("package"),
   settle: icon("corner-down-right"),
+  diagram: icon("workflow"),
 };
-const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle fresh memories" };
+const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle fresh memories", diagram: "Draw a diagram" };
 
 async function loadDream() {
   try {
@@ -716,6 +733,7 @@ function renderDream(report) {
             <div class="reason">${esc(p.reason)}</div>
             <div class="meta">
               <span>${esc(KIND_NAME[p.kind])}</span>
+              ${(p.kind === "merge" || p.kind === "topic") && p.plan && p.plan.diagram ? "<span>+ diagram</span>" : ""}
               ${p.notes_removed ? `<span>−${p.notes_removed} note${p.notes_removed > 1 ? "s" : ""}</span>` : ""}
               ${freed > 0 ? `<span>−${bytes(freed)}</span>` : ""}
               ${p.error ? `<span class="status outdated">${esc(p.error)}</span>` : ""}
@@ -730,6 +748,18 @@ function renderDream(report) {
   list._report = report;
 }
 
+// The note a preview belongs to, for finding the images it links.
+function previewNotePath(proposal) {
+  const plan = proposal.plan || {};
+  return plan.note || plan.keep || plan.path || (proposal.notes || [])[0] || "";
+}
+
+// A diagram Dream proposes isn't a file yet: its text rides along, keyed by the path the preview links.
+function diagramsOf(proposal) {
+  const diagram = (proposal.plan || {}).diagram;
+  return diagram && diagram.file ? { [diagram.file]: diagram.text || "" } : {};
+}
+
 $("#proposals").addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   const card = event.target.closest(".card");
@@ -739,8 +769,11 @@ $("#proposals").addEventListener("click", async (event) => {
   if (act === "preview") {
     const pane = card.querySelector(".preview");
     const proposal = ($("#proposals")._report.proposals || []).find((p) => p.id === id);
-    pane.innerHTML = renderMarkdown(proposal.preview || "");
     pane.hidden = !pane.hidden;
+    if (!pane.hidden) {
+      pane.innerHTML = renderMarkdown(proposal.preview || "");
+      loadImages(pane, previewNotePath(proposal), diagramsOf(proposal));
+    }
     button.textContent = pane.hidden ? "Preview" : "Hide preview";
     return;
   }

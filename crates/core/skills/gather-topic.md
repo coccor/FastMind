@@ -35,6 +35,16 @@ Records stay as they are: don't gather meeting notes, daily notes or logs, howev
   - Where notes disagree, say so with both dates. Add nothing that isn't in the notes.
 - **reason**: one plain sentence for the user: why these belong together.
 
+## Diagram (optional)
+
+Most topic notes need no diagram: leave `diagram` and `diagram_caption` as `""`. Draw one only
+when the note describes structure or movement a reader has to hold in their head: parts and how
+they connect, steps with branches, states and transitions, layers, a sequence of messages, a
+timeline of more than a few events. Not for a list, a single fact, a how-to with steps in a line,
+opinions or records, nor when it would only repeat the headings: if a three-column table would
+say the same thing, no diagram. Draw only what the note says, in FastDraw (below), without a code
+fence; `diagram_caption` says in a short phrase what it shows. FastMind puts it under the title.
+
 ## Example
 
 n1 (2026-10-23) "Readiness probe": "readiness failing = pod pulled from the service"
@@ -47,6 +57,7 @@ n3 (2026-10-30) "probe timeouts": "timeoutSeconds defaults to 1s!! slow /health 
   "title": "Kubernetes health probes",
   "summary": "Readiness decides traffic, liveness decides restarts, and the 1-second default timeout makes slow health endpoints fail both.",
   "body": "## Readiness\n\nA failing readiness probe takes the pod out of the service; it isn't restarted.\n\n## Liveness\n\nA failing liveness probe restarts the pod. Too strict a probe causes restart loops under load.\n\n## Timeouts\n\n`timeoutSeconds` defaults to 1 second, so a slow `/health` endpoint fails the probe.",
-  "reason": "All three are about how Kubernetes probes decide traffic and restarts."
+  "reason": "All three are about how Kubernetes probes decide traffic and restarts.",
+  "diagram": "", "diagram_caption": ""
 }
 ```

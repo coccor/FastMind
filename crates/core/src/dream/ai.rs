@@ -24,7 +24,11 @@ pub struct Judge<'a> {
     ask: Ask<'a>,
     nb: Notebook,
     preferences: String,
+    /// The night's date, for the prompts.
+    now: chrono::DateTime<chrono::Local>,
     budget: AtomicUsize,
+    /// Requests held back from `budget` for the last step of the night.
+    reserve: AtomicUsize,
     cache: Mutex<HashMap<String, String>>,
     cache_path: std::path::PathBuf,
     pub errors: Mutex<Vec<String>>,
@@ -32,7 +36,13 @@ pub struct Judge<'a> {
 }
 
 impl<'a> Judge<'a> {
-    pub fn new(nb: &Notebook, ask: Ask<'a>, budget: usize, preferences: &str) -> Self {
+    pub fn new(
+        nb: &Notebook,
+        ask: Ask<'a>,
+        budget: usize,
+        preferences: &str,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> Self {
         let cache_path = nb.state_dir().join("dream").join("verdicts.json");
         let cache = std::fs::read(&cache_path)
             .ok()
@@ -42,7 +52,9 @@ impl<'a> Judge<'a> {
             ask,
             nb: nb.clone(),
             preferences: preferences.to_owned(),
+            now,
             budget: AtomicUsize::new(budget),
+            reserve: AtomicUsize::new(0),
             cache: Mutex::new(cache),
             cache_path,
             errors: Mutex::new(Vec::new()),
@@ -50,9 +62,39 @@ impl<'a> Judge<'a> {
         }
     }
 
+    /// Holds back up to `n` requests from the budget, until [`Judge::release`].
+    pub fn hold(&self, n: usize) {
+        let left = self
+            .budget
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                Some(left - left.min(n))
+            })
+            .unwrap_or_else(|left| left);
+        self.reserve.fetch_add(left.min(n), Ordering::SeqCst);
+    }
+
+    /// Gives the requests held back to the budget again.
+    pub fn release(&self) {
+        let held = self.reserve.swap(0, Ordering::SeqCst);
+        self.budget.fetch_add(held, Ordering::SeqCst);
+    }
+
     /// The system prompt for skill `name`.
     fn prompt(&self, name: &str) -> String {
-        crate::skills::system(Some(&self.nb), name, &self.preferences, crate::skills::JSON)
+        self.prompt_with(name, &[])
+    }
+
+    /// The system prompt for skill `name`, followed by the `extra` skills (the jobs that draw
+    /// get FastDraw's language).
+    pub fn prompt_with(&self, name: &str, extra: &[&str]) -> String {
+        crate::skills::system_at(
+            Some(&self.nb),
+            name,
+            extra,
+            &self.preferences,
+            crate::skills::JSON,
+            self.now,
+        )
     }
 
     /// Keeps the verdicts for the notes still around, so the cache doesn't grow forever.
@@ -65,6 +107,19 @@ impl<'a> Judge<'a> {
         }
     }
 
+    /// The cached answer for `key`, without asking; the key is kept for the next night.
+    fn cached(
+        &self,
+        used: &Mutex<std::collections::HashSet<String>>,
+        key: &str,
+        system: &str,
+    ) -> Option<Value> {
+        let key = cache_key(key, system);
+        let cached = self.cache.lock().expect("cache lock").get(&key).cloned();
+        used.lock().expect("used lock").insert(key);
+        serde_json::from_str(&cached?).ok()
+    }
+
     /// The model's answer for `key`: from the cache when these exact notes were judged before.
     fn verdict(
         &self,
@@ -74,12 +129,10 @@ impl<'a> Judge<'a> {
         user: &str,
         schema: &Value,
     ) -> Option<Value> {
-        // A changed skill (or preferences) asks again.
-        let key = &format!("{key}~{:x}", text::fnv(system.as_bytes()));
-        used.lock().expect("used lock").insert(key.clone());
-        if let Some(cached) = self.cache.lock().expect("cache lock").get(key) {
-            return serde_json::from_str(cached).ok();
+        if let Some(cached) = self.cached(used, key, system) {
+            return Some(cached);
         }
+        let key = &cache_key(key, system);
         // Take one request from the budget, or give up on this one.
         if self
             .budget
@@ -111,6 +164,26 @@ impl<'a> Judge<'a> {
             }
         }
     }
+}
+
+/// `key` with the system prompt it was asked with: a changed skill (or preferences) asks again,
+/// but a new day doesn't, so the date line is left out.
+fn cache_key(key: &str, system: &str) -> String {
+    let undated: Vec<&str> = system
+        .lines()
+        .filter(|line| !line.starts_with(crate::skills::TODAY))
+        .collect();
+    format!(
+        "{key}~{:x}",
+        text::fnv(
+            undated
+                .join(
+                    "
+"
+                )
+                .as_bytes()
+        )
+    )
 }
 
 /// The cache key for judging `notes` for `task`: their paths and exact contents.
@@ -188,6 +261,156 @@ fn id_index(id: &str) -> Option<usize> {
         .checked_sub(1)
 }
 
+// ---- Diagrams ----
+
+/// The skills a job that may draw is given after its own.
+const DRAWING: &[&str] = &["fastdraw-language"];
+
+/// A diagram as the model drew it, with what's wrong with it.
+#[derive(Clone, Debug)]
+pub struct Drafted {
+    pub caption: String,
+    /// The FastDraw source, without a code fence.
+    pub text: String,
+    /// What keeps it from drawing (`Line N: …`); empty when it draws.
+    pub errors: Vec<String>,
+}
+
+/// The diagram in an answer's `diagram` and `diagram_caption` fields, or `None` when it
+/// has none.
+pub fn drafted(text: &Value, caption: &Value) -> Option<Drafted> {
+    let caption = caption
+        .as_str()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    drafted_from(text, caption)
+}
+
+fn drafted_from(text: &Value, caption: String) -> Option<Drafted> {
+    let text = crate::diagram::unfence(text.as_str()?)?;
+    let errors = crate::diagram::errors(&text);
+    Some(Drafted {
+        caption,
+        text,
+        errors,
+    })
+}
+
+/// A diagram that doesn't draw, asked about once more: the job's own skill, the errors, and
+/// "fix only these". `key` is the job's cache key; the fix is cached beside it. The caption
+/// stays as it was.
+pub fn fix(
+    judge: &Judge,
+    skill: &str,
+    key: &str,
+    drafted: &Drafted,
+    used: &Mutex<std::collections::HashSet<String>>,
+) -> Option<Drafted> {
+    let user = format!(
+        "The diagram you drew doesn't draw.
+
+<diagram>
+{}
+</diagram>
+
+<errors>
+{}
+</errors>
+
+Fix only these errors; change nothing else.",
+        escape(drafted.text.trim()),
+        escape(&drafted.errors.join(
+            "
+"
+        ))
+    );
+    let schema = json!({
+        "type": "object", "additionalProperties": false, "required": ["diagram"],
+        "properties": {"diagram": {"type": "string"}}
+    });
+    let system = judge.prompt_with(skill, DRAWING);
+    let answer = judge.verdict(used, &format!("{key}~fix"), &system, &user, &schema)?;
+    drafted_from(&answer["diagram"], drafted.caption.clone())
+}
+
+/// Whether a note was already asked about a diagram and it came to nothing: not worth one, no
+/// diagram in the answer, or a diagram still broken after its fix. Asks nothing.
+pub fn came_to_nothing<'j>(
+    judge: &'j Judge,
+    used: &'j Mutex<std::collections::HashSet<String>>,
+) -> impl Fn(&Note) -> bool + 'j {
+    let system = judge.prompt_with("draw-diagram", DRAWING);
+    move |note| {
+        let key = key("diagram", &[note]);
+        let Some(answer) = judge.cached(used, &key, &system) else {
+            return false;
+        };
+        if answer["worth"].as_bool() != Some(true) {
+            return true;
+        }
+        let Some(drafted) = drafted(&answer["diagram"], &answer["caption"]) else {
+            return true;
+        };
+        if drafted.errors.is_empty() {
+            return false;
+        }
+        judge
+            .cached(used, &format!("{key}~fix"), &system)
+            .and_then(|fixed| drafted_from(&fixed["diagram"], String::new()))
+            .is_some_and(|fixed| !fixed.errors.is_empty())
+    }
+}
+
+/// What the model thinks of drawing a diagram for one note.
+pub struct Drawing {
+    pub worth: bool,
+    pub caption: String,
+    pub reason: String,
+    /// The diagram, when it's worth one and the answer has one.
+    pub diagram: Option<Drafted>,
+}
+
+fn draw_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["worth", "kind", "caption", "diagram", "reason"],
+        "properties": {
+            "worth": {"type": "boolean"}, "kind": {"type": "string"},
+            "caption": {"type": "string"}, "diagram": {"type": "string"},
+            "reason": {"type": "string"}
+        }
+    })
+}
+
+/// Whether `note` is worth a diagram, and the diagram.
+pub fn draw(
+    judge: &Judge,
+    note: &Note,
+    used: &Mutex<std::collections::HashSet<String>>,
+) -> Option<Drawing> {
+    let key = key("diagram", &[note]);
+    let user = block("n1", note, 6000, "");
+    let system = judge.prompt_with("draw-diagram", DRAWING);
+    let answer = judge.verdict(used, &key, &system, &user, &draw_schema())?;
+    let worth = answer["worth"].as_bool() == Some(true);
+    let diagram = if worth {
+        drafted(&answer["diagram"], &answer["caption"])
+    } else {
+        None
+    };
+    Some(Drawing {
+        worth,
+        caption: diagram
+            .as_ref()
+            .map(|d| d.caption.clone())
+            .unwrap_or_default(),
+        reason: answer["reason"].as_str().unwrap_or("").trim().to_owned(),
+        diagram,
+    })
+}
+
 // ---- Merges ----
 
 pub struct Merge {
@@ -197,6 +420,7 @@ pub struct Merge {
     pub reason: String,
     /// The merged note's body, starting with its `# ` title.
     pub body: String,
+    pub diagram: Option<Drafted>,
 }
 
 fn merge_schema() -> Value {
@@ -204,10 +428,11 @@ fn merge_schema() -> Value {
         "type": "object", "additionalProperties": false, "required": ["groups"],
         "properties": {"groups": {"type": "array", "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["keep", "absorb", "reason", "text"],
+            "required": ["keep", "absorb", "reason", "text", "diagram", "diagram_caption"],
             "properties": {
                 "keep": {"type": "string"}, "absorb": {"type": "array", "items": {"type": "string"}},
-                "reason": {"type": "string"}, "text": {"type": "string"}
+                "reason": {"type": "string"}, "text": {"type": "string"},
+                "diagram": {"type": "string"}, "diagram_caption": {"type": "string"}
             }
         }}}
     })
@@ -231,7 +456,7 @@ pub fn merges(
             &format!(" linked_from=\"{}\"", links[i]),
         ));
     }
-    let system = judge.prompt("merge");
+    let system = judge.prompt_with("merge", DRAWING);
     let Some(answer) = judge.verdict(used, &key, &system, &user, &merge_schema()) else {
         return Vec::new();
     };
@@ -263,6 +488,7 @@ pub fn merges(
             absorb,
             reason: g["reason"].as_str().unwrap_or("").trim().to_owned(),
             body: ensure_title(&body, &group[keep].title),
+            diagram: drafted(&g["diagram"], &g["diagram_caption"]),
         });
     }
     out
@@ -286,18 +512,29 @@ pub struct Topic {
     pub summary: String,
     pub body: String,
     pub reason: String,
+    pub diagram: Option<Drafted>,
 }
 
 fn topic_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
-        "required": ["members", "title", "summary", "body", "reason"],
+        "required": ["members", "title", "summary", "body", "reason", "diagram", "diagram_caption"],
         "properties": {
             "members": {"type": "array", "items": {"type": "string"}},
             "title": {"type": "string"}, "summary": {"type": "string"},
-            "body": {"type": "string"}, "reason": {"type": "string"}
+            "body": {"type": "string"}, "reason": {"type": "string"},
+            "diagram": {"type": "string"}, "diagram_caption": {"type": "string"}
         }
     })
+}
+
+/// The skill that judges a gathering task with `hint` (see [`topic`]).
+pub fn topic_skill(hint: &str) -> &'static str {
+    if hint.is_empty() {
+        "gather-topic"
+    } else {
+        "gather-thread"
+    }
 }
 
 /// Whether `group` makes one subject, and the topic note. `hint` says what kind of notes they
@@ -313,11 +550,7 @@ pub fn topic(
     for (i, note) in group.iter().enumerate() {
         user.push_str(&block(&format!("n{}", i + 1), note, 4000, ""));
     }
-    let system = judge.prompt(if hint.is_empty() {
-        "gather-topic"
-    } else {
-        "gather-thread"
-    });
+    let system = judge.prompt_with(topic_skill(hint), DRAWING);
     let answer = judge.verdict(used, &key, &system, &user, &topic_schema())?;
     let mut members: Vec<usize> = strings(&answer["members"])
         .iter()
@@ -349,6 +582,7 @@ pub fn topic(
         summary: answer["summary"].as_str().unwrap_or("").trim().to_owned(),
         body,
         reason: answer["reason"].as_str().unwrap_or("").trim().to_owned(),
+        diagram: drafted(&answer["diagram"], &answer["diagram_caption"]),
     })
 }
 

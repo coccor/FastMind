@@ -28,7 +28,7 @@ Usage: fastmind [--notebook DIR] [--json] <command> [args]
 
   dream                   Look over the notebook and propose how to compress it
   dream show              The latest proposals
-  dream apply ID|all [--kinds merge,topic,archive,fix_link,pack]
+  dream apply ID|all [--kinds merge,topic,archive,fix_link,pack,diagram,settle]
   dream reject ID
   dream undo ID           Undo an applied proposal
 
