@@ -10,6 +10,7 @@
 - [Coding agents](#coding-agents)
 - [Home](#home)
 - [Your notes, your files](#your-notes-your-files)
+  - [Diagrams in notes](#diagrams-in-notes)
 
 ## Capture
 
@@ -71,7 +72,17 @@ a sentence about those notes.
 | **Archive** | Unlinked, unopened for 180 days, `done` for 30, empty, or an AI session unopened for 90 | Whether each is still worth having (when in doubt, keep) | Moved to `.fastmind/archive/`: still searchable, restored in one click. Files nothing links to are archived by rule. |
 | **Fix a link** | `[[Postgress vacuum]]` points nowhere; notes with close or shared names | Which note it meant, from the link and its line, or none | The link is corrected. |
 | **Settle** | Fresh memories older than six hours | Where each belongs: the home it suggested when it wrote the note, or a folder or topic note | Moved there, linked from the topic note. Runs on its own. |
+| **Diagram** | Existing notes of 250 words or more that describe a structure or a flow and show no picture yet | Whether a picture would help, and draws it | The diagram is saved beside the note in `attachments/` and linked under the note's summary. Never runs on its own unless you allow it. |
 | **Pack** | Archived notes and undo records over 30 days old | (rules only) | Zipped into `.fastmind/archive/packs/`. Notes can still be restored from the pack. |
+
+A merged or topic note (or an AI-session thread) may come with a diagram, drawn when the notes
+describe a structure or a flow. Preview shows it; Accept saves it with the note; Undo removes
+both. The card says **+ diagram**.
+
+**Diagrams.** Each night Dream asks about at most `dream.diagram_notes` existing notes (3 by
+default; 0 turns diagrams off). Three of the night's `model_requests` are kept back for this, so
+diagrams still happen on a busy night. A diagram that doesn't draw gets one fix at the end of
+the night; if it still fails it is dropped and the report says so.
 
 ### What keeps it safe
 
@@ -79,6 +90,8 @@ a sentence about those notes.
   by default). What you accept is exactly what you previewed: a merged or topic note the AI
   wrote applies only while its notes are unchanged, else it waits for the next night.
   **Skip** means Dream won't propose that again, and **Keep forever** pins a note.
+- Filing or settling a note carries its own `attachments/` files (images and diagrams) to its
+  new folder and rewrites the links. A file another note still shows is copied, not moved.
 - Every change goes through a journal. Undo puts the files back, but it refuses if you've
   edited them since.
 - Some notes are never touched: home notes (`type: topic`, `project`, `moc`), pinned notes,
@@ -105,6 +118,8 @@ read and improve.
 | `archive` | Deciding which stale notes are still worth keeping |
 | `fix-link` | Deciding which note a broken link meant |
 | `settle` | Deciding where a fresh memory belongs |
+| `draw-diagram` | Deciding whether a note needs a diagram, and drawing it |
+| `fastdraw-language` | The `.fdraw` language the diagrams are written in |
 | `answer` | Answering your questions from your notes |
 | `ai-session` | Writing up an AI coding session |
 
@@ -156,6 +171,15 @@ Your notes stay plain `.md` files with front matter, readable by any editor, Obs
 [FastPad](https://github.com/coccor/FastPad) or an agent. FastMind keeps its own state in
 `.fastmind/` inside the notebook (Dream's proposals, the undo journal, the archive). There's no
 database to lose and no account.
+
+### Diagrams in notes
+
+A diagram is a small text file ending in `.fdraw`, kept in the note's `attachments/` folder.
+Show it like an image: `![the request path](attachments/request-path.fdraw)` or
+`![[request-path.fdraw]]`. FastMind draws it itself, offline, with the notebook's fonts and
+icons; in dark mode it uses the look's dark counterpart. A look file can be named only by a
+relative path. If a diagram can't be drawn, the note shows `[diagram: Line 4: …]` with the line
+at fault.
 
 The first run finds Obsidian vaults and [FastCapture](https://github.com/coccor/FastCapture)
 notebooks, or makes `~/FastMind`.

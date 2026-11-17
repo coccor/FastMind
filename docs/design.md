@@ -50,6 +50,11 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
   schema, or the TITLE/SUMMARY/BODY shape). The verdict cache key includes the prompt's hash,
   so an edited skill asks again. Captures also get `kind` (finding, meeting, bookmark…) and
   `questions`; a captured meeting or journal entry counts as a record.
+- **Diagrams** (`diagram.rs`). `fastdraw-render`, pinned to a git revision (it isn't on
+  crates.io), draws `.fdraw` text to SVG with its fonts and icons embedded, so nothing is read
+  from the machine or the network. A look file is accepted only as a relative path (absolute and network
+  paths are refused). The `image` command returns an SVG data URL; a broken diagram returns an error
+  naming the line.
 - **Claude through plain HTTP.** Rust has no official Anthropic SDK, so `model.rs` calls the
   Messages API directly: `claude-opus-5-5` at low effort, with server-side refusal fallback.
   The key comes from `ANTHROPIC_API_KEY`. "Local" speaks the OpenAI-compatible chat API that
@@ -78,7 +83,14 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
 7. **Settle:** inbox notes untouched for six hours go to the home the writing step suggested;
    the rest are placed by the model among their likely home notes and folders.
 8. **Pack:** loose archive items and undo records older than their cutoffs.
-9. Save the report, then apply the kinds allowed to run without asking.
+9. **Diagrams:** merge and topic answers may carry a diagram; each is drawn to check it. A
+   broken one gets one fix request at the end of the night, else it is dropped and the report
+   says so. Then up to `diagram_notes` existing notes (250 words or more, structural, no image
+   or diagram yet, ranked by structure then use) are asked in the `draw-diagram` skill. Three
+   of `model_requests` are reserved for this step while `diagram_notes` is above 0; the earlier
+   steps share the rest, and this one may also use what they left. Apply writes the `.fdraw`
+   and the note's link in one journal entry.
+10. Save the report, then apply the kinds allowed to run without asking.
 
 Questions run three at a time, within `model_requests` a night. Each answer is cached in
 `.fastmind/dream/verdicts.json` under a key made of the notes' paths and content hashes; the

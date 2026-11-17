@@ -664,8 +664,8 @@ $("#inbox-list").addEventListener("keydown", (event) => {
 });
 
 // ---------- Dream ----------
-const KIND_ICON = { merge: "⧉", topic: "❖", archive: "▤", fix_link: "⛓", pack: "⇲", settle: "↳" };
-const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle fresh memories" };
+const KIND_ICON = { merge: "⧉", topic: "❖", archive: "▤", fix_link: "⛓", pack: "⇲", settle: "↳", diagram: "◇" };
+const KIND_NAME = { merge: "Merge copies", topic: "Gather a topic", archive: "Archive", fix_link: "Fix a link", pack: "Pack the archive", settle: "Settle fresh memories", diagram: "Draw a diagram" };
 
 async function loadDream() {
   try {
@@ -721,6 +721,7 @@ function renderDream(report) {
             <div class="reason">${esc(p.reason)}</div>
             <div class="meta">
               <span>${esc(KIND_NAME[p.kind])}</span>
+              ${p.plan && p.plan.diagram ? "<span>+ diagram</span>" : ""}
               ${p.notes_removed ? `<span>−${p.notes_removed} note${p.notes_removed > 1 ? "s" : ""}</span>` : ""}
               ${freed > 0 ? `<span>−${bytes(freed)}</span>` : ""}
               ${p.error ? `<span class="status outdated">${esc(p.error)}</span>` : ""}
