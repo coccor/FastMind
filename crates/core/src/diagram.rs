@@ -92,13 +92,18 @@ fn draw_unguarded(text: &str, file: Option<&Path>, dark: bool) -> Drawn {
 /// One bundled or look-supplied font, ready to embed.
 struct Face {
     family: String,
+    weight: u32,
+    italic: bool,
     base64: String,
 }
 
 fn face(bytes: &[u8]) -> Option<Face> {
+    // `fontmeta` is not in the crate's documented API; the crate is pinned to a commit, so this is safe.
     let meta = fastdraw_render::fontmeta::font_meta(bytes)?;
     Some(Face {
         family: meta.family,
+        weight: meta.weight,
+        italic: meta.italic,
         base64: STANDARD.encode(bytes),
     })
 }
@@ -138,8 +143,11 @@ fn embed_fonts(svg: &str, font_files: &[std::path::PathBuf]) -> String {
     for f in bundled_faces().iter().chain(&own) {
         if used.contains(&f.family) {
             css.push_str(&format!(
-                "@font-face{{font-family:\"{}\";src:url(data:font/ttf;base64,{})}}",
-                f.family, f.base64
+                "@font-face{{font-family:\"{}\";font-weight:{};font-style:{};src:url(data:font/ttf;base64,{})}}",
+                f.family,
+                f.weight,
+                if f.italic { "italic" } else { "normal" },
+                f.base64
             ));
         }
     }
@@ -231,6 +239,22 @@ mod tests {
             "{:?}",
             d.errors
         );
+    }
+
+    #[test]
+    fn faces_carry_their_weight_and_style() {
+        let bold = bundled_faces()
+            .iter()
+            .find(|f| f.weight >= 600)
+            .expect("a bold bundled face");
+        let svg = format!("<svg><text font-family=\"{}\">x</text></svg>", bold.family);
+        let out = embed_fonts(&svg, &[]);
+        assert!(
+            out.contains(&format!("font-weight:{};", bold.weight)),
+            "{}",
+            &out[..200.min(out.len())]
+        );
+        assert!(out.contains("font-style:"));
     }
 
     #[test]
