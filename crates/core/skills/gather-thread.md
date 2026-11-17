@@ -33,3 +33,13 @@ empty `members` list.
   Keep every finding, decision, file name, command and error message from the sessions. Add
   nothing they don't say. Never include secrets, tokens or passwords.
 - **reason**: one plain sentence for the user: why these sessions are one thread.
+
+## Diagram (optional)
+
+Most thread notes need no diagram: leave `diagram` and `diagram_caption` as `""`. Draw one only
+when the note describes structure or movement a reader has to hold in their head: parts and how
+they connect, steps with branches, states and transitions, layers, a sequence of messages, a
+timeline of more than a few events. Not for a list, a single fact, a how-to with steps in a line,
+opinions or records, nor when it would only repeat the headings: if a three-column table would
+say the same thing, no diagram. Draw only what the note says, in FastDraw (below), without a code
+fence; `diagram_caption` says in a short phrase what it shows. FastMind puts it under the title.

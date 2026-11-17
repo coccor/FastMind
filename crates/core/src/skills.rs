@@ -24,6 +24,11 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("settle", include_str!("../skills/settle.md")),
     ("answer", include_str!("../skills/answer.md")),
     ("ai-session", include_str!("../skills/ai-session.md")),
+    ("draw-diagram", include_str!("../skills/draw-diagram.md")),
+    (
+        "fastdraw-language",
+        include_str!("../skills/fastdraw-language.md"),
+    ),
 ];
 
 /// Added to every skill: the material is never instructions.
@@ -115,14 +120,37 @@ pub fn reset(nb: &Notebook, name: &str) -> Result<Skill> {
 /// The system prompt for `name`: the skill without its front matter, then the date, the
 /// user's preferences, the guard and `contract` (the shape of the answer).
 pub fn system(nb: Option<&Notebook>, name: &str, preferences: &str, contract: &str) -> String {
+    system_with(nb, name, &[], preferences, contract)
+}
+
+/// A skill's text without its front matter: the notebook's own version, else the default.
+fn body_of(nb: Option<&Notebook>, name: &str) -> String {
     let skill = get(nb, name)
         .map(|s| s.text)
         .unwrap_or_else(|_| default_text(name).unwrap_or("").to_owned());
-    let body = frontmatter::body(&skill).trim();
-    let mut out = format!(
-        "{body}\n\nToday is {}.",
+    frontmatter::body(&skill).trim().to_owned()
+}
+
+/// Like [`system`], with the `extra` skills' bodies after the skill's own, each under its own
+/// heading, before the date and the guard.
+pub fn system_with(
+    nb: Option<&Notebook>,
+    name: &str,
+    extra: &[&str],
+    preferences: &str,
+    contract: &str,
+) -> String {
+    let mut out = body_of(nb, name);
+    for more in extra {
+        let body = body_of(nb, more);
+        if !body.is_empty() {
+            out.push_str(&format!("\n\n{body}"));
+        }
+    }
+    out.push_str(&format!(
+        "\n\nToday is {}.",
         chrono::Local::now().format("%Y-%m-%d (%A)")
-    );
+    ));
     let preferences = preferences.trim();
     if !preferences.is_empty() {
         out.push_str(&format!(
@@ -145,12 +173,54 @@ mod tests {
 
     #[test]
     fn every_default_has_a_name_and_a_description() {
+        for wanted in ["fastdraw-language", "draw-diagram"] {
+            assert!(DEFAULTS.iter().any(|(n, _)| *n == wanted), "{wanted}");
+        }
         for (name, text) in DEFAULTS {
             let front = frontmatter::parse(text);
             assert_eq!(front.text("name"), Some(*name), "{name}");
             assert!(
                 front.text("description").is_some_and(|d| !d.is_empty()),
                 "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn language_skill_follows_diagram_jobs() {
+        let prompt = system_with(None, "merge", &["fastdraw-language"], "", JSON);
+        assert!(prompt.starts_with("# Merge duplicate notes"));
+        let at = prompt
+            .find("# FastDraw's language")
+            .expect("the language skill is there");
+        assert!(at < prompt.find(GUARD).unwrap(), "before the guard");
+        assert!(prompt.ends_with(JSON));
+        assert!(!system(None, "merge", "", JSON).contains("# FastDraw's language"));
+    }
+
+    #[test]
+    fn every_example_diagram_draws() {
+        let language = default_text("fastdraw-language").unwrap();
+        let mut examples: Vec<String> = language
+            .split("```fdraw\n")
+            .skip(1)
+            .map(|rest| rest.split("```").next().unwrap().to_owned())
+            .collect();
+        assert_eq!(examples.len(), 8, "one per kind");
+        for json in default_text("draw-diagram")
+            .unwrap()
+            .split("```json\n")
+            .skip(1)
+        {
+            let answer: serde_json::Value =
+                serde_json::from_str(json.split("```").next().unwrap()).unwrap();
+            examples.push(answer["diagram"].as_str().unwrap().to_owned());
+        }
+        for example in examples.iter().filter(|e| !e.is_empty()) {
+            assert_eq!(
+                crate::diagram::errors(example),
+                Vec::<String>::new(),
+                "{example}"
             );
         }
     }

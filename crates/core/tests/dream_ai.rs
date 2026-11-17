@@ -31,6 +31,9 @@ fn id_of(user: &str, title: &str) -> Option<String> {
     Some(user[start..end].to_owned())
 }
 
+/// The diagram the model draws for the starter topic.
+const STARTER_DIAGRAM: &str = "```fdraw\nfeed: node \"Feed daily\" at 40,40\nrise: node \"Rises\" at 240,40\nfeed -> rise\n```";
+
 /// A model with fixed opinions about this notebook.
 fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
     let answer = if system.contains("# Merge duplicate notes") {
@@ -40,7 +43,8 @@ fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
         ) {
             (Some(a), Some(b)) => json!({"groups": [{
                 "keep": a, "absorb": [b], "reason": "Both are the conference wifi details.",
-                "text": "# Conference wifi\n\nNetwork DevConf-Guest, password orange-falcon-42 (from the badge desk)."
+                "text": "# Conference wifi\n\nNetwork DevConf-Guest, password orange-falcon-42 (from the badge desk).",
+                "diagram": "", "diagram_caption": ""
             }]}),
             _ => json!({"groups": []}),
         }
@@ -50,7 +54,8 @@ fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
             .filter_map(|t| id_of(user, t))
             .collect();
         json!({"members": ids, "title": "Sourdough starter", "summary": "How the starter is kept.",
-               "body": "## Feeding\n\nDaily, rye helps.\n\n## Sourness\n\nFeed more often.", "reason": "All about the starter."})
+               "body": "## Feeding\n\nDaily, rye helps.\n\n## Sourness\n\nFeed more often.", "reason": "All about the starter.",
+               "diagram": STARTER_DIAGRAM, "diagram_caption": "How the starter is kept"})
     } else if system.contains("# Decide what to archive") {
         let keep_reason = id_of(user, "Old decision");
         let archive = id_of(user, "Old todo");
@@ -548,4 +553,129 @@ fn diagram_link_for_a_name_with_parentheses_resolves() {
     let target = fastmind_core::links::relative_target_path("notes/Redis (eviction).md", link);
     assert_eq!(target, "notes/attachments/Redis (eviction).fdraw");
     assert!(nb.exists(&target));
+}
+
+// ---- Diagrams in merge and topic answers ----
+
+/// The three starter fragments and the two wifi copies.
+fn starter_and_wifi(nb: &Notebook) {
+    write(
+        nb,
+        "Conference wifi.md",
+        "# Conference wifi\n\nThe conference wifi network is DevConf-Guest, password orange-falcon-42.\n",
+        10,
+    );
+    write(
+        nb,
+        "Wifi at the conference.md",
+        "# Wifi at the conference\n\nGot the conference wifi password from the badge desk: orange-falcon-42 on DevConf-Guest.\n",
+        9,
+    );
+    for (name, body) in [
+        (
+            "Starter feeding",
+            "Feed the sourdough starter every morning with flour and water.",
+        ),
+        (
+            "Starter too sour",
+            "The sourdough starter smells too sour, feed the starter more often.",
+        ),
+        (
+            "Starter rye",
+            "Rye flour in the sourdough starter feeding makes the starter rise faster.",
+        ),
+    ] {
+        write(
+            nb,
+            &format!("kitchen/{name}.md"),
+            &format!("# {name}\n\n{body}\n"),
+            20,
+        );
+    }
+}
+
+fn answers(model: dream::ai::Ask, nb: &Notebook) -> Report {
+    dream::run(nb, &DreamSettings::default(), Some(model), Local::now()).unwrap()
+}
+
+#[test]
+fn topic_proposal_carries_its_diagram() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    starter_and_wifi(&nb);
+    let report = answers(&model, &nb);
+    let topic = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Topic)
+        .expect("the topic is proposed");
+    let Plan::Topic {
+        diagram: Some(d), ..
+    } = &topic.plan
+    else {
+        panic!(
+            "the topic has its diagram: {:?} {:?}",
+            topic.plan, report.model_notes
+        )
+    };
+    assert_eq!(d.file, "attachments/Sourdough starter.fdraw");
+    assert_eq!(d.caption, "How the starter is kept");
+    assert!(d.text.starts_with("feed: node"), "unfenced: {}", d.text);
+    let preview = topic.preview.as_ref().unwrap();
+    assert!(
+        preview.contains(
+            "> How the starter is kept.\n\n![How the starter is kept](attachments/Sourdough%20starter.fdraw)\n"
+        ),
+        "{preview}"
+    );
+}
+
+#[test]
+fn merge_without_diagram_has_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    starter_and_wifi(&nb);
+    let report = answers(&model, &nb);
+    let merge = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Merge)
+        .expect("the merge is proposed");
+    assert!(matches!(&merge.plan, Plan::Merge { diagram: None, .. }));
+    assert!(!merge.preview.as_ref().unwrap().contains(".fdraw"));
+}
+
+#[test]
+fn broken_topic_diagram_is_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    starter_and_wifi(&nb);
+    let broken = |system: &str, user: &str, schema: &Value| -> Result<String> {
+        let mut answer: Value = serde_json::from_str(&model(system, user, schema)?).unwrap();
+        if answer.get("members").is_some() {
+            answer["diagram"] = json!("feed: node \"Feed\" at 40,40\nfeed -> nowhere\n");
+        }
+        Ok(answer.to_string())
+    };
+    let report = answers(&broken, &nb);
+    let topic = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Topic)
+        .expect("the topic is still proposed");
+    assert!(matches!(&topic.plan, Plan::Topic { diagram: None, .. }));
+    assert!(!topic.preview.as_ref().unwrap().contains(".fdraw"));
+    assert!(
+        report
+            .model_notes
+            .iter()
+            .any(|n| n.starts_with("1 diagram dropped: Line")),
+        "{:?}",
+        report.model_notes
+    );
+    assert!(
+        !report.summary.contains("couldn't answer"),
+        "a dropped diagram isn't a failed question: {}",
+        report.summary
+    );
 }

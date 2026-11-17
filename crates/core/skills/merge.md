@@ -45,6 +45,16 @@ The kept note keeps its title.
   their dates: "Password changed to `lime-otter-7` (2026-11-10; was `orange-falcon-42`)."
 - Add nothing that isn't in the notes.
 
+## Diagram (optional)
+
+Most merged notes need no diagram: leave `diagram` and `diagram_caption` as `""`. Draw one only
+when the note describes structure or movement a reader has to hold in their head: parts and how
+they connect, steps with branches, states and transitions, layers, a sequence of messages, a
+timeline of more than a few events. Not for a list, a single fact, a how-to with steps in a line,
+opinions or records, nor when it would only repeat the headings: if a three-column table would
+say the same thing, no diagram. Draw only what the note says, in FastDraw (below), without a code
+fence; `diagram_caption` says in a short phrase what it shows. FastMind puts it under the title.
+
 ## The reason
 
 One plain sentence the user will read in the morning, specific to these notes: "Both record
@@ -62,6 +72,7 @@ cache. also BuildKit --mount=type=cache for npm cache"
 {"groups": [{
   "keep": "n1", "absorb": ["n2"],
   "reason": "Both describe ordering a Dockerfile to keep the dependency layer cached; the second adds BuildKit cache mounts.",
-  "text": "# Docker build cache\n\nCopy `package.json` and run `npm ci` before copying the source, so code changes don't bust the dependency layer.\n\nBuildKit cache mounts (`--mount=type=cache`) also keep the npm cache between builds."
+  "text": "# Docker build cache\n\nCopy `package.json` and run `npm ci` before copying the source, so code changes don't bust the dependency layer.\n\nBuildKit cache mounts (`--mount=type=cache`) also keep the npm cache between builds.",
+  "diagram": "", "diagram_caption": ""
 }]}
 ```

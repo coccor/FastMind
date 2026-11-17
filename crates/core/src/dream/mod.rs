@@ -301,6 +301,8 @@ pub fn run_in(
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut claimed: HashSet<usize> = HashSet::new();
     let mut model_notes = Vec::new();
+    // Diagrams the model drew that don't draw, by the proposal they belong to.
+    let mut held_diagrams: Vec<(usize, ai::Drafted)> = Vec::new();
 
     let protected = |note: &Note| {
         note.is_home()
@@ -376,6 +378,13 @@ pub fn run_in(
                     .iter()
                     .map(|n| format!("\"{}\"", n.title))
                     .collect();
+                let (diagram, preview) = with_drafted(
+                    merge.diagram,
+                    notes[keep].stem(),
+                    &merged,
+                    proposals.len(),
+                    &mut held_diagrams,
+                );
                 proposals.push(Proposal {
                     id: String::new(),
                     kind: Kind::Merge,
@@ -389,7 +398,7 @@ pub fn run_in(
                     notes_removed: absorb.len(),
                     bytes_freed: freed,
                     disk_freed: 0,
-                    preview: Some(merged.clone()),
+                    preview: Some(preview),
                     status: Status::Pending,
                     entry: None,
                     error: None,
@@ -397,7 +406,7 @@ pub fn run_in(
                         keep: notes[keep].path.clone(),
                         absorb: absorbed.iter().map(|n| n.path.clone()).collect(),
                         text: Some(merged),
-                        diagram: None,
+                        diagram,
                     },
                     sources: fingerprint(&all),
                 });
@@ -596,6 +605,13 @@ pub fn run_in(
                 now,
             );
             let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
+            let (diagram, preview) = with_drafted(
+                topic.diagram,
+                name.strip_suffix(".md").unwrap_or(&name),
+                &text,
+                proposals.len(),
+                &mut held_diagrams,
+            );
             proposals.push(Proposal {
                 id: String::new(),
                 kind: Kind::Topic,
@@ -614,7 +630,7 @@ pub fn run_in(
                 notes_removed: group.len() - 1,
                 bytes_freed: freed,
                 disk_freed: 0,
-                preview: Some(text.clone()),
+                preview: Some(preview),
                 status: Status::Pending,
                 entry: None,
                 error: None,
@@ -624,7 +640,7 @@ pub fn run_in(
                     summary: topic.summary,
                     fragments: group.iter().map(|n| n.path.clone()).collect(),
                     text: Some(text),
-                    diagram: None,
+                    diagram,
                 },
                 sources: fingerprint(&group),
             });
@@ -1400,6 +1416,19 @@ pub fn run_in(
             }
         }
     }
+    let failed_questions = model_notes.len();
+    // Diagrams that still don't draw are left out; the notes they came with stay.
+    if let Some((_, first)) = held_diagrams.first() {
+        let dropped = held_diagrams.len();
+        model_notes.push(format!(
+            "{dropped} diagram{} dropped: {}",
+            if dropped == 1 { "" } else { "s" },
+            first
+                .errors
+                .first()
+                .map_or("it doesn't draw", String::as_str)
+        ));
+    }
     let skips = skipped(nb);
     proposals.retain(|proposal| !skips.contains(&signature(proposal)));
     for (n, proposal) in proposals.iter_mut().enumerate() {
@@ -1407,12 +1436,12 @@ pub fn run_in(
     }
     let mut summary = summarize(&before, &proposals);
     if let Some(judge) = &judge
-        && !model_notes.is_empty()
+        && failed_questions > 0
     {
         let asked = judge.asked.load(std::sync::atomic::Ordering::SeqCst);
         summary = format!(
             "{summary} The model couldn't answer {} of {asked} questions ({}), so some candidates wait for the next night.",
-            model_notes.len().min(asked),
+            failed_questions.min(asked),
             model_notes[0]
         );
     }
@@ -1500,6 +1529,33 @@ fn majority_folder(notes: &[&Note]) -> String {
         .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0)))
         .map(|(folder, _)| folder.to_owned())
         .unwrap_or_default()
+}
+
+/// The diagram the model drew for the note at proposal `index` (named after `stem`), and the
+/// note's preview with it. A diagram that doesn't draw is held for the fix pass, so the note
+/// goes without it until then.
+fn with_drafted(
+    drafted: Option<ai::Drafted>,
+    stem: &str,
+    text: &str,
+    index: usize,
+    held: &mut Vec<(usize, ai::Drafted)>,
+) -> (Option<Diagram>, String) {
+    let Some(drafted) = drafted else {
+        return (None, text.to_owned());
+    };
+    if !drafted.errors.is_empty() {
+        held.push((index, drafted));
+        return (None, text.to_owned());
+    }
+    let file = format!("{stem}.fdraw");
+    let preview = compose::with_diagram(text, &drafted.caption, &compose::diagram_link(&file));
+    let diagram = Diagram {
+        file: format!("attachments/{file}"),
+        caption: drafted.caption,
+        text: drafted.text,
+    };
+    (Some(diagram), preview)
 }
 
 /// A topic note the model wrote: front matter as gathering makes it, then its summary, body

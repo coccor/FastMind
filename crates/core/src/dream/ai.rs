@@ -52,7 +52,19 @@ impl<'a> Judge<'a> {
 
     /// The system prompt for skill `name`.
     fn prompt(&self, name: &str) -> String {
-        crate::skills::system(Some(&self.nb), name, &self.preferences, crate::skills::JSON)
+        self.prompt_with(name, &[])
+    }
+
+    /// The system prompt for skill `name`, followed by the `extra` skills (the jobs that draw
+    /// get FastDraw's language).
+    pub fn prompt_with(&self, name: &str, extra: &[&str]) -> String {
+        crate::skills::system_with(
+            Some(&self.nb),
+            name,
+            extra,
+            &self.preferences,
+            crate::skills::JSON,
+        )
     }
 
     /// Keeps the verdicts for the notes still around, so the cache doesn't grow forever.
@@ -188,6 +200,39 @@ fn id_index(id: &str) -> Option<usize> {
         .checked_sub(1)
 }
 
+// ---- Diagrams ----
+
+/// The skills a job that may draw is given after its own.
+const DRAWING: &[&str] = &["fastdraw-language"];
+
+/// A diagram as the model drew it, with what's wrong with it.
+#[derive(Clone, Debug)]
+pub struct Drafted {
+    pub caption: String,
+    /// The FastDraw source, without a code fence.
+    pub text: String,
+    /// What keeps it from drawing (`Line N: …`); empty when it draws.
+    pub errors: Vec<String>,
+}
+
+/// The diagram in an answer's `diagram` and `diagram_caption` fields, or `None` when it
+/// has none.
+pub fn drafted(text: &Value, caption: &Value) -> Option<Drafted> {
+    let text = crate::diagram::unfence(text.as_str()?)?;
+    let caption = caption
+        .as_str()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let errors = crate::diagram::errors(&text);
+    Some(Drafted {
+        caption,
+        text,
+        errors,
+    })
+}
+
 // ---- Merges ----
 
 pub struct Merge {
@@ -197,6 +242,7 @@ pub struct Merge {
     pub reason: String,
     /// The merged note's body, starting with its `# ` title.
     pub body: String,
+    pub diagram: Option<Drafted>,
 }
 
 fn merge_schema() -> Value {
@@ -204,10 +250,11 @@ fn merge_schema() -> Value {
         "type": "object", "additionalProperties": false, "required": ["groups"],
         "properties": {"groups": {"type": "array", "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["keep", "absorb", "reason", "text"],
+            "required": ["keep", "absorb", "reason", "text", "diagram", "diagram_caption"],
             "properties": {
                 "keep": {"type": "string"}, "absorb": {"type": "array", "items": {"type": "string"}},
-                "reason": {"type": "string"}, "text": {"type": "string"}
+                "reason": {"type": "string"}, "text": {"type": "string"},
+                "diagram": {"type": "string"}, "diagram_caption": {"type": "string"}
             }
         }}}
     })
@@ -231,7 +278,7 @@ pub fn merges(
             &format!(" linked_from=\"{}\"", links[i]),
         ));
     }
-    let system = judge.prompt("merge");
+    let system = judge.prompt_with("merge", DRAWING);
     let Some(answer) = judge.verdict(used, &key, &system, &user, &merge_schema()) else {
         return Vec::new();
     };
@@ -263,6 +310,7 @@ pub fn merges(
             absorb,
             reason: g["reason"].as_str().unwrap_or("").trim().to_owned(),
             body: ensure_title(&body, &group[keep].title),
+            diagram: drafted(&g["diagram"], &g["diagram_caption"]),
         });
     }
     out
@@ -286,16 +334,18 @@ pub struct Topic {
     pub summary: String,
     pub body: String,
     pub reason: String,
+    pub diagram: Option<Drafted>,
 }
 
 fn topic_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
-        "required": ["members", "title", "summary", "body", "reason"],
+        "required": ["members", "title", "summary", "body", "reason", "diagram", "diagram_caption"],
         "properties": {
             "members": {"type": "array", "items": {"type": "string"}},
             "title": {"type": "string"}, "summary": {"type": "string"},
-            "body": {"type": "string"}, "reason": {"type": "string"}
+            "body": {"type": "string"}, "reason": {"type": "string"},
+            "diagram": {"type": "string"}, "diagram_caption": {"type": "string"}
         }
     })
 }
@@ -313,11 +363,14 @@ pub fn topic(
     for (i, note) in group.iter().enumerate() {
         user.push_str(&block(&format!("n{}", i + 1), note, 4000, ""));
     }
-    let system = judge.prompt(if hint.is_empty() {
-        "gather-topic"
-    } else {
-        "gather-thread"
-    });
+    let system = judge.prompt_with(
+        if hint.is_empty() {
+            "gather-topic"
+        } else {
+            "gather-thread"
+        },
+        DRAWING,
+    );
     let answer = judge.verdict(used, &key, &system, &user, &topic_schema())?;
     let mut members: Vec<usize> = strings(&answer["members"])
         .iter()
@@ -349,6 +402,7 @@ pub fn topic(
         summary: answer["summary"].as_str().unwrap_or("").trim().to_owned(),
         body,
         reason: answer["reason"].as_str().unwrap_or("").trim().to_owned(),
+        diagram: drafted(&answer["diagram"], &answer["diagram_caption"]),
     })
 }
 
