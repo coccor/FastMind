@@ -179,18 +179,26 @@ mod tests {
         assert!(d.svg.contains("@font-face"));
         let used = families_used(&d.svg);
         assert!(!used.is_empty());
-        for family in used
+        const GENERIC: [&str; 9] = [
+            "serif",
+            "sans-serif",
+            "monospace",
+            "cursive",
+            "fantasy",
+            "system-ui",
+            "emoji",
+            "math",
+            "fangsong",
+        ];
+        let named: Vec<_> = used
             .iter()
-            .filter(|u| bundled_faces().iter().any(|f| &f.family == *u))
-        {
+            .filter(|u| !GENERIC.contains(&u.as_str()) && !u.starts_with("ui-"))
+            .collect();
+        assert!(!named.is_empty(), "no named family in {used:?}");
+        for family in named {
             let rule = format!("@font-face{{font-family:\"{family}\"");
             assert!(d.svg.contains(&rule), "no {rule}");
         }
-        assert!(
-            used.iter()
-                .any(|u| bundled_faces().iter().any(|f| &f.family == u)),
-            "no bundled family in {used:?}"
-        );
     }
 
     #[test]
