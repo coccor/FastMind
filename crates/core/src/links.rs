@@ -300,7 +300,7 @@ fn decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn encode(text: &str) -> String {
+pub(crate) fn encode(text: &str) -> String {
     text.replace('%', "%25")
         .replace(' ', "%20")
         .replace('(', "%28")

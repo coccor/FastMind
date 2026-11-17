@@ -513,3 +513,39 @@ fn merge_with_diagram_writes_it_beside_the_kept_note() {
     assert!(read(&nb, "w/Keep.md").contains("![c](attachments/Keep.fdraw)"));
     assert!(nb.root.join("w/attachments/Keep.fdraw").exists());
 }
+
+#[test]
+fn diagram_link_for_a_name_with_parentheses_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "notes/Redis (eviction).md",
+        "# Redis (eviction)\n\nBody.\n",
+        1,
+    );
+    let plan = Plan::Diagram {
+        note: "notes/Redis (eviction).md".into(),
+        diagram: diagram("c"),
+    };
+    save_report(
+        &nb,
+        vec![proposal(
+            "d1",
+            Kind::Diagram,
+            &["notes/Redis (eviction).md"],
+            plan,
+        )],
+    );
+    let done = dream::apply(&nb, "d1", Local::now()).unwrap();
+    assert_eq!(done.status, Status::Applied, "{:?}", done.error);
+    let text = read(&nb, "notes/Redis (eviction).md");
+    assert!(
+        text.contains("![c](attachments/Redis%20%28eviction%29.fdraw)"),
+        "{text}"
+    );
+    let link = text.split("](").nth(1).unwrap().split(')').next().unwrap();
+    let target = fastmind_core::links::relative_target_path("notes/Redis (eviction).md", link);
+    assert_eq!(target, "notes/attachments/Redis (eviction).fdraw");
+    assert!(nb.exists(&target));
+}

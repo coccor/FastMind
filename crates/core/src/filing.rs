@@ -9,7 +9,7 @@ use crate::notebook::{HOME_TYPES, Notebook};
 use crate::search::Index;
 use crate::{Error, Result, fsx};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Home {
@@ -257,8 +257,47 @@ fn file_links(body: &str) -> Vec<String> {
     found
 }
 
+/// The targets of `![[...]]` embeds in `body`, as written (no `|size` or `#part`).
+fn embeds(body: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (at, _) in body.match_indices("![[") {
+        let rest = &body[at + 3..];
+        if let Some(close) = rest.find("]]") {
+            let inner = &rest[..close];
+            let end = inner.find(['|', '#']).unwrap_or(inner.len());
+            if !inner.contains('\n') && end > 0 {
+                found.push(inner[..end].trim().to_owned());
+            }
+        }
+    }
+    found
+}
+
+fn attachments_of(folder: &str) -> String {
+    if folder.is_empty() {
+        "attachments".to_owned()
+    } else {
+        format!("{folder}/attachments")
+    }
+}
+
+fn folder_part(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(folder, _)| folder)
+}
+
+/// Whether the note `n` shows the attachment at `source`, by a Markdown link or an embed.
+fn shows(n: &crate::Note, source: &str) -> bool {
+    file_links(n.body())
+        .iter()
+        .any(|t| links::relative_target_path(&n.path, t) == source)
+        || embeds(n.body()).iter().any(|t| {
+            let name = t.rsplit('/').next().unwrap_or(t);
+            format!("{}/{name}", attachments_of(folder_part(&n.path))) == source
+        })
+}
+
 /// The files a note shows from its own `attachments/` folder (images, diagrams) go with it: they
-/// are copied into `attachments/` beside its new place, and moved when no other note uses them.
+/// are copied into `attachments/` beside its new place, and moved when no other note shows them.
 /// Returns `body` with those links pointing at the copies.
 fn carry_attachments(
     tx: &mut Transaction,
@@ -269,44 +308,66 @@ fn carry_attachments(
     mut body: String,
 ) -> Result<String> {
     let nb = tx.notebook().clone();
-    let mut seen = HashSet::new();
-    for written in file_links(&body) {
-        let local = !written.contains("://") && !written.starts_with(['/', '#']);
-        if !local || written.to_ascii_lowercase().ends_with(".md") || !seen.insert(written.clone())
-        {
-            continue;
-        }
-        let source = links::relative_target_path(from, &written);
-        let (source_folder, name) = source.rsplit_once('/').unwrap_or(("", &source));
-        if !source_folder.ends_with("attachments") || !nb.exists(&source) {
-            continue;
-        }
-        let folder = if to_folder.is_empty() {
-            "attachments".to_owned()
-        } else {
-            format!("{to_folder}/attachments")
-        };
-        if folder == source_folder {
-            continue;
+    let own = attachments_of(folder_part(from));
+    let folder = attachments_of(to_folder);
+    if own == folder {
+        return Ok(body);
+    }
+    // Copies `name` from this note's attachments to the new one; the name it has there.
+    let carry = |tx: &mut Transaction, name: &str| -> Result<Option<String>> {
+        let source = format!("{own}/{name}");
+        if name.to_ascii_lowercase().ends_with(".md") || !nb.exists(&source) {
+            return Ok(None);
         }
         let (stem, extension) = name.rsplit_once('.').unwrap_or((name, ""));
         let free = fsx::free_name(stem, extension, |c| nb.exists(&format!("{folder}/{c}")));
-        let moved = format!("{folder}/{free}");
-        tx.write(&moved, &std::fs::read(nb.path(&source)?)?)?;
-        let shared = notes.iter().filter(|n| n.path != from).any(|n| {
-            file_links(n.body())
-                .iter()
-                .any(|t| links::relative_target_path(&n.path, t) == source)
-        });
-        if !shared {
+        tx.write(
+            &format!("{folder}/{free}"),
+            &std::fs::read(nb.path(&source)?)?,
+        )?;
+        if !notes
+            .iter()
+            .filter(|n| n.path != from)
+            .any(|n| shows(n, &source))
+        {
             tx.remove(&source)?;
         }
-        let new = links::relative_path(to, &moved)
-            .split('/')
-            .map(|part| part.replace(' ', "%20"))
-            .collect::<Vec<_>>()
-            .join("/");
-        body = body.replace(&format!("]({written}"), &format!("]({new}"));
+        Ok(Some(free))
+    };
+    let mut done: HashMap<String, Option<String>> = HashMap::new();
+    for written in file_links(&body) {
+        let local = !written.contains("://") && !written.starts_with(['/', '#']);
+        if !local || done.contains_key(&written) {
+            continue;
+        }
+        let source = links::relative_target_path(from, &written);
+        let name = source.strip_prefix(&format!("{own}/")).map(str::to_owned);
+        let moved = match name.filter(|n| !n.contains('/')) {
+            Some(name) => carry(tx, &name)?,
+            None => None,
+        };
+        if let Some(free) = &moved {
+            let new = links::relative_path(to, &format!("{folder}/{free}"))
+                .split('/')
+                .map(links::encode)
+                .collect::<Vec<_>>()
+                .join("/");
+            body = body.replace(&format!("]({written}"), &format!("]({new}"));
+        }
+        done.insert(written, moved);
+    }
+    for written in embeds(&body) {
+        let name = written.rsplit('/').next().unwrap_or(&written).to_owned();
+        if done.contains_key(&format!("![[{written}")) {
+            continue;
+        }
+        let moved = carry(tx, &name)?;
+        if let Some(free) = &moved
+            && *free != name
+        {
+            body = body.replace(&format!("![[{written}"), &format!("![[{free}"));
+        }
+        done.insert(format!("![[{written}"), moved);
     }
     Ok(body)
 }

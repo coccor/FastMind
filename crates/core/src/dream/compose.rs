@@ -96,9 +96,9 @@ fn merged_list(base: Vec<String>, more: impl IntoIterator<Item = String>) -> Vec
     out
 }
 
-/// The Markdown link to a diagram file in `attachments/`, spaces written as `%20`.
+/// The Markdown link to a diagram file in `attachments/`, spaces and parentheses escaped.
 pub fn diagram_link(file_name: &str) -> String {
-    format!("attachments/{}", file_name.replace(' ', "%20"))
+    format!("attachments/{}", crate::links::encode(file_name))
 }
 
 /// `note_text` with the diagram placed after its title and the summary quote that follows it,
