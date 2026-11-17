@@ -1106,3 +1106,179 @@ fn two_merges_from_one_question_keep_their_own_fixes() {
     assert_eq!(*fixes.lock().unwrap(), 2, "the fixes are cached");
     check(&again);
 }
+
+// ---- Final review fixes ----
+
+/// Like [`counted`], dreaming at `now`.
+fn counted_at(
+    nb: &Notebook,
+    settings: &DreamSettings,
+    answer: Answer,
+    now: chrono::DateTime<Local>,
+) -> (Report, Vec<String>) {
+    let asked = Mutex::new(Vec::new());
+    let ask = |system: &str, user: &str, schema: &Value| {
+        let what = label(system, user);
+        let title = user
+            .split("title=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or("");
+        asked.lock().unwrap().push(format!("{what}:{title}"));
+        answer(system, user, schema)
+    };
+    let report = dream::run(nb, settings, Some(&ask), now).unwrap();
+    (report, asked.into_inner().unwrap())
+}
+
+#[test]
+fn declined_notes_give_their_slot_to_the_next_candidate_the_next_day() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    // Most structure first: A, B, C, then D. A isn't worth a diagram, B gets one, C's stays
+    // broken after its fix.
+    for (name, rounds) in [("Alpha", 6), ("Bravo", 5), ("Charlie", 4), ("Delta", 3)] {
+        write(
+            &nb,
+            &format!("work/{name}.md"),
+            &structural(name, rounds),
+            10,
+        );
+    }
+    starter_and_wifi(&nb);
+    let answer = |system: &str, user: &str, schema: &Value| -> Result<String> {
+        if label(system, user) == "fix" {
+            return Ok(json!({ "diagram": BROKEN }).to_string());
+        }
+        if label(system, user) == "draw" && user.contains("title=\"Charlie\"") {
+            return Ok(json!({"worth": true, "kind": "flow", "caption": "Flow",
+                             "diagram": BROKEN, "reason": "Steps."})
+            .to_string());
+        }
+        if label(system, user) == "draw" {
+            let worth = user.contains("title=\"Bravo\"") || user.contains("title=\"Delta\"");
+            return Ok(if worth {
+                json!({"worth": true, "kind": "flow", "caption": "Flow",
+                       "diagram": REQUEST_DIAGRAM, "reason": "Steps."})
+            } else {
+                json!({"worth": false, "kind": "", "caption": "", "diagram": "",
+                       "reason": "Fine as text."})
+            }
+            .to_string());
+        }
+        model(system, user, schema)
+    };
+    let night = Local::now();
+    let (_, asked) = counted_at(&nb, &DreamSettings::default(), &answer, night);
+    let mut drawn: Vec<&String> = asked.iter().filter(|a| a.starts_with("draw:")).collect();
+    drawn.sort();
+    assert_eq!(
+        drawn,
+        ["draw:Alpha", "draw:Bravo", "draw:Charlie"],
+        "{asked:?}"
+    );
+    assert!(asked.iter().any(|a| a.starts_with("merge:")), "{asked:?}");
+    assert_eq!(
+        asked.iter().filter(|a| a.starts_with("fix:")).count(),
+        1,
+        "{asked:?}"
+    );
+
+    let (report, asked) = counted_at(
+        &nb,
+        &DreamSettings::default(),
+        &answer,
+        night + chrono::Duration::days(1),
+    );
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|a| a.starts_with("draw:"))
+            .collect::<Vec<_>>(),
+        ["draw:Delta"],
+        "Alpha said no, Charlie stayed broken, Bravo is cached: {asked:?}"
+    );
+    assert!(
+        !asked.iter().any(|a| a.starts_with("merge:")),
+        "yesterday's merge verdict still counts: {asked:?}"
+    );
+    let diagrams: Vec<&String> = report
+        .proposals
+        .iter()
+        .filter(|p| p.kind == Kind::Diagram)
+        .flat_map(|p| p.notes.iter())
+        .collect();
+    assert_eq!(diagrams, ["work/Bravo.md", "work/Delta.md"]);
+}
+
+#[test]
+fn encoded_links_keep_their_attachments() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "x/X (y).md",
+        "# X (y)\n\n![c](attachments/X%20%28y%29.fdraw)\n\n![s](attachments/shot%20%281%29%2520.png)\n",
+        1,
+    );
+    write(&nb, "x/attachments/X (y).fdraw", "box A\n", 200);
+    write(&nb, "x/attachments/shot (1)%20.png", "PNG", 200);
+    let report = dream::run(&nb, &DreamSettings::default(), None, Local::now()).unwrap();
+    let archived: Vec<&Plan> = report
+        .proposals
+        .iter()
+        .filter(|p| p.kind == Kind::Archive)
+        .map(|p| &p.plan)
+        .collect();
+    assert!(archived.is_empty(), "{archived:?}");
+}
+
+#[test]
+fn merge_into_a_note_with_a_diagram_adds_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    starter_and_wifi(&nb);
+    write(
+        &nb,
+        "Conference wifi.md",
+        "# Conference wifi\n\nThe conference wifi network is DevConf-Guest, password orange-falcon-42.\n\n![Network](attachments/Keep.fdraw)\n",
+        10,
+    );
+    write(&nb, "attachments/Keep.fdraw", "box A\n", 10);
+    let answer = |system: &str, user: &str, schema: &Value| -> Result<String> {
+        let mut answer: Value = serde_json::from_str(&model(system, user, schema)?).unwrap();
+        if let Some(group) = answer.get_mut("groups").and_then(|g| g.get_mut(0)) {
+            group["text"] = json!(
+                "# Conference wifi\n\nNetwork DevConf-Guest, password orange-falcon-42.\n\n![Network](attachments/Keep.fdraw)"
+            );
+            group["diagram"] = json!(REQUEST_DIAGRAM);
+            group["diagram_caption"] = json!("The network");
+        }
+        Ok(answer.to_string())
+    };
+    let report = answers(&answer, &nb);
+    let merge = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Merge)
+        .expect("the merge is proposed");
+    assert!(
+        matches!(&merge.plan, Plan::Merge { diagram: None, .. }),
+        "{:?}",
+        merge.plan
+    );
+    assert_eq!(merge.preview.as_ref().unwrap().matches("![").count(), 1);
+    assert!(
+        !report.model_notes.iter().any(|n| n.contains("dropped")),
+        "{:?}",
+        report.model_notes
+    );
+    let done = dream::apply(&nb, &merge.id, Local::now()).unwrap();
+    assert_eq!(done.status, Status::Applied, "{:?}", done.error);
+    let files: Vec<String> = fs::read_dir(nb.root.join("attachments"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["Keep.fdraw"]);
+    assert_eq!(read(&nb, "attachments/Keep.fdraw"), "box A\n");
+}

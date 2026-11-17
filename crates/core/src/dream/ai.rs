@@ -24,6 +24,8 @@ pub struct Judge<'a> {
     ask: Ask<'a>,
     nb: Notebook,
     preferences: String,
+    /// The night's date, for the prompts.
+    now: chrono::DateTime<chrono::Local>,
     budget: AtomicUsize,
     /// Requests held back from `budget` for the last step of the night.
     reserve: AtomicUsize,
@@ -34,7 +36,13 @@ pub struct Judge<'a> {
 }
 
 impl<'a> Judge<'a> {
-    pub fn new(nb: &Notebook, ask: Ask<'a>, budget: usize, preferences: &str) -> Self {
+    pub fn new(
+        nb: &Notebook,
+        ask: Ask<'a>,
+        budget: usize,
+        preferences: &str,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> Self {
         let cache_path = nb.state_dir().join("dream").join("verdicts.json");
         let cache = std::fs::read(&cache_path)
             .ok()
@@ -44,6 +52,7 @@ impl<'a> Judge<'a> {
             ask,
             nb: nb.clone(),
             preferences: preferences.to_owned(),
+            now,
             budget: AtomicUsize::new(budget),
             reserve: AtomicUsize::new(0),
             cache: Mutex::new(cache),
@@ -78,12 +87,13 @@ impl<'a> Judge<'a> {
     /// The system prompt for skill `name`, followed by the `extra` skills (the jobs that draw
     /// get FastDraw's language).
     pub fn prompt_with(&self, name: &str, extra: &[&str]) -> String {
-        crate::skills::system_with(
+        crate::skills::system_at(
             Some(&self.nb),
             name,
             extra,
             &self.preferences,
             crate::skills::JSON,
+            self.now,
         )
     }
 
@@ -97,6 +107,19 @@ impl<'a> Judge<'a> {
         }
     }
 
+    /// The cached answer for `key`, without asking; the key is kept for the next night.
+    fn cached(
+        &self,
+        used: &Mutex<std::collections::HashSet<String>>,
+        key: &str,
+        system: &str,
+    ) -> Option<Value> {
+        let key = cache_key(key, system);
+        let cached = self.cache.lock().expect("cache lock").get(&key).cloned();
+        used.lock().expect("used lock").insert(key);
+        serde_json::from_str(&cached?).ok()
+    }
+
     /// The model's answer for `key`: from the cache when these exact notes were judged before.
     fn verdict(
         &self,
@@ -106,12 +129,10 @@ impl<'a> Judge<'a> {
         user: &str,
         schema: &Value,
     ) -> Option<Value> {
-        // A changed skill (or preferences) asks again.
-        let key = &format!("{key}~{:x}", text::fnv(system.as_bytes()));
-        used.lock().expect("used lock").insert(key.clone());
-        if let Some(cached) = self.cache.lock().expect("cache lock").get(key) {
-            return serde_json::from_str(cached).ok();
+        if let Some(cached) = self.cached(used, key, system) {
+            return Some(cached);
         }
+        let key = &cache_key(key, system);
         // Take one request from the budget, or give up on this one.
         if self
             .budget
@@ -143,6 +164,26 @@ impl<'a> Judge<'a> {
             }
         }
     }
+}
+
+/// `key` with the system prompt it was asked with: a changed skill (or preferences) asks again,
+/// but a new day doesn't, so the date line is left out.
+fn cache_key(key: &str, system: &str) -> String {
+    let undated: Vec<&str> = system
+        .lines()
+        .filter(|line| !line.starts_with(crate::skills::TODAY))
+        .collect();
+    format!(
+        "{key}~{:x}",
+        text::fnv(
+            undated
+                .join(
+                    "
+"
+                )
+                .as_bytes()
+        )
+    )
 }
 
 /// The cache key for judging `notes` for `task`: their paths and exact contents.
@@ -292,6 +333,34 @@ Fix only these errors; change nothing else.",
     let system = judge.prompt_with(skill, DRAWING);
     let answer = judge.verdict(used, &format!("{key}~fix"), &system, &user, &schema)?;
     drafted_from(&answer["diagram"], drafted.caption.clone())
+}
+
+/// Whether a note was already asked about a diagram and it came to nothing: not worth one, no
+/// diagram in the answer, or a diagram still broken after its fix. Asks nothing.
+pub fn came_to_nothing<'j>(
+    judge: &'j Judge,
+    used: &'j Mutex<std::collections::HashSet<String>>,
+) -> impl Fn(&Note) -> bool + 'j {
+    let system = judge.prompt_with("draw-diagram", DRAWING);
+    move |note| {
+        let key = key("diagram", &[note]);
+        let Some(answer) = judge.cached(used, &key, &system) else {
+            return false;
+        };
+        if answer["worth"].as_bool() != Some(true) {
+            return true;
+        }
+        let Some(drafted) = drafted(&answer["diagram"], &answer["caption"]) else {
+            return true;
+        };
+        if drafted.errors.is_empty() {
+            return false;
+        }
+        judge
+            .cached(used, &format!("{key}~fix"), &system)
+            .and_then(|fixed| drafted_from(&fixed["diagram"], String::new()))
+            .is_some_and(|fixed| !fixed.errors.is_empty())
+    }
 }
 
 /// What the model thinks of drawing a diagram for one note.

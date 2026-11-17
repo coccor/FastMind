@@ -284,7 +284,8 @@ pub fn run_in(
     ai: Option<ai::Ask>,
     now: DateTime<Local>,
 ) -> Result<Report> {
-    let judge = ai.map(|ask| ai::Judge::new(nb, ask, settings.model_requests, &places.preferences));
+    let judge =
+        ai.map(|ask| ai::Judge::new(nb, ask, settings.model_requests, &places.preferences, now));
     if let Some(judge) = &judge
         && settings.diagram_notes > 0
     {
@@ -376,8 +377,10 @@ pub fn run_in(
                     .map(|n| format!("\"{}\"", n.title))
                     .collect();
                 let at = proposals.len();
+                // A kept note that shows a picture already gets no second one.
+                let drafted = merge.diagram.filter(|_| !has_picture(notes[keep].body()));
                 let (diagram, preview) =
-                    with_drafted(merge.diagram, notes[keep].stem(), &merged, |drafted| {
+                    with_drafted(drafted, notes[keep].stem(), &merged, |drafted| {
                         // One question may answer several merges: each fix is keyed by its
                         // own merge's notes, so they never share a cached fix.
                         held_diagrams.push(Held {
@@ -932,6 +935,8 @@ pub fn run_in(
         .map(|note| note.text.to_lowercase())
         .collect::<Vec<_>>()
         .join("\n");
+    // Links name files encoded (`%20`, `%28`, `%29`, `%25`): compare them decoded too.
+    let decoded = crate::links::decode(&all_text);
     for (path, size) in nb.attachments() {
         let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
         let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -939,7 +944,7 @@ pub fn run_in(
             continue;
         }
         let lower = name.to_lowercase();
-        if all_text.contains(&lower) || all_text.contains(&lower.replace(' ', "%20")) {
+        if all_text.contains(&lower) || decoded.contains(&lower) {
             continue;
         }
         let Ok(meta) = fs::metadata(nb.path(&path)?) else {
@@ -1379,7 +1384,8 @@ pub fn run_in(
                     .filter(|path| skips.contains(&format!("{:?}:{path}", Kind::Diagram))),
             )
             .collect();
-        let candidates = diagram_candidates(&notes, &taken, settings, places, &usage, now);
+        let done = ai::came_to_nothing(judge, &used_keys);
+        let candidates = diagram_candidates(&notes, &taken, settings, places, &usage, now, done);
         let drawn = drawn_proposals(judge, &notes, &candidates, &used_keys, &mut held_diagrams);
         proposals.extend(drawn);
     }
@@ -1565,14 +1571,14 @@ fn majority_folder(notes: &[&Note]) -> String {
 
 /// The diagram the model drew for a note named after `stem`, and the note's preview with it.
 /// A diagram that doesn't draw goes to `hold`, for the fix pass, and the note goes without it
-/// until then.
+/// until then. A note that already shows a picture keeps it alone: one diagram per note.
 fn with_drafted(
     drafted: Option<ai::Drafted>,
     stem: &str,
     text: &str,
     hold: impl FnOnce(ai::Drafted),
 ) -> (Option<Diagram>, String) {
-    let Some(drafted) = drafted else {
+    let Some(drafted) = drafted.filter(|_| !has_picture(text)) else {
         return (None, text.to_owned());
     };
     if !drafted.errors.is_empty() {
@@ -2254,7 +2260,8 @@ fn attach_diagram(proposal: &mut Proposal, drafted: ai::Drafted) {
 /// Existing notes worth asking about a diagram: long, with signs of structure and no picture
 /// yet, not protected, a record, an AI session or thread, in the inbox or touched in the last
 /// two days, and not `taken` by anything else this night. Most structure first (then most
-/// recently opened, then touched), at most `settings.diagram_notes`.
+/// recently opened, then touched), at most `settings.diagram_notes`, passing over the notes
+/// whose question already `came_to_nothing`, so the next ones get their turn.
 fn diagram_candidates(
     notes: &[Note],
     taken: &HashSet<String>,
@@ -2262,6 +2269,7 @@ fn diagram_candidates(
     places: &Places,
     usage: &Usage,
     now: DateTime<Local>,
+    came_to_nothing: impl Fn(&Note) -> bool,
 ) -> Vec<usize> {
     let inbox = format!("{}/", places.inbox);
     let mut ranked: Vec<(usize, usize)> = notes
@@ -2291,8 +2299,12 @@ fn diagram_candidates(
             })
             .then_with(|| nb.touched.cmp(&na.touched))
     });
-    ranked.truncate(settings.diagram_notes);
-    ranked.into_iter().map(|(i, _)| i).collect()
+    ranked
+        .into_iter()
+        .map(|(i, _)| i)
+        .filter(|i| !came_to_nothing(&notes[*i]))
+        .take(settings.diagram_notes)
+        .collect()
 }
 
 /// How much `body` reads like structure: arrows and numbered steps count most, then `##`

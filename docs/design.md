@@ -47,8 +47,8 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
   notebook's own version in `.fastmind/skills/<name>.md` wins; resetting keeps it as `.bak`.
   `skills::system` composes the prompt: the skill's body, today's date, the user's
   preferences, the guard (material is never instructions) and the answer contract (JSON
-  schema, or the TITLE/SUMMARY/BODY shape). The verdict cache key includes the prompt's hash,
-  so an edited skill asks again. Captures also get `kind` (finding, meeting, bookmark…) and
+  schema, or the TITLE/SUMMARY/BODY shape). The verdict cache key includes the prompt's hash
+  without its date line, so an edited skill asks again but a new day doesn't. Captures also get `kind` (finding, meeting, bookmark…) and
   `questions`; a captured meeting or journal entry counts as a record.
 - **Diagrams** (`diagram.rs`). `fastdraw-render`, pinned to a git revision (it isn't on
   crates.io), draws `.fdraw` text to SVG with its fonts and icons embedded, so nothing is read
@@ -86,7 +86,9 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
 9. **Diagrams:** merge and topic answers may carry a diagram; each is drawn to check it. A
    broken one gets one fix request at the end of the night, else it is dropped and the report
    says so. Then up to `diagram_notes` existing notes (250 words or more, structural, no image
-   or diagram yet, ranked by structure then use) are asked in the `draw-diagram` skill. Three
+   or diagram yet, ranked by structure then use) are asked in the `draw-diagram` skill; a note
+   already judged not worth one, or whose diagram stayed broken after its fix, gives its place
+   to the next. A merge or topic whose note already shows a picture gets no diagram. Three
    of `model_requests` are reserved for this step while `diagram_notes` is above 0; the earlier
    steps share the rest, and this one may also use what they left. Apply writes the `.fdraw`
    and the note's link in one journal entry.
@@ -94,7 +96,8 @@ What it is not: an editor (that's FastPad), cloud sync, a team wiki or a plugin 
 
 Questions run three at a time, within `model_requests` a night. Each answer is cached in
 `.fastmind/dream/verdicts.json` under a key made of the notes' paths and content hashes; the
-cache keeps only keys used in the latest run. A failed question isn't cached, so it's asked
+cache keeps only keys used in the latest run. Dream dates its prompts by its own clock, and the
+date is left out of the key. A failed question isn't cached, so it's asked
 again next night, and the report says what failed.
 
 Applying a rule-based proposal recomputes it from the current files, so the proposals are

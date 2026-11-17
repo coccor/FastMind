@@ -140,6 +140,18 @@ pub fn system_with(
     preferences: &str,
     contract: &str,
 ) -> String {
+    system_at(nb, name, extra, preferences, contract, chrono::Local::now())
+}
+
+/// Like [`system_with`], dated `today` (Dream dates its questions by its own clock).
+pub fn system_at(
+    nb: Option<&Notebook>,
+    name: &str,
+    extra: &[&str],
+    preferences: &str,
+    contract: &str,
+    today: chrono::DateTime<chrono::Local>,
+) -> String {
     let mut out = body_of(nb, name);
     for more in extra {
         let body = body_of(nb, more);
@@ -147,10 +159,7 @@ pub fn system_with(
             out.push_str(&format!("\n\n{body}"));
         }
     }
-    out.push_str(&format!(
-        "\n\nToday is {}.",
-        chrono::Local::now().format("%Y-%m-%d (%A)")
-    ));
+    out.push_str(&format!("\n\n{TODAY}{}.", today.format("%Y-%m-%d (%A)")));
     let preferences = preferences.trim();
     if !preferences.is_empty() {
         out.push_str(&format!(
@@ -163,6 +172,9 @@ pub fn system_with(
     }
     out
 }
+
+/// How the date line of a system prompt starts.
+pub const TODAY: &str = "Today is ";
 
 /// The answer shape for the jobs that return JSON.
 pub const JSON: &str = "Answer with one JSON object that matches the schema, and nothing else.";

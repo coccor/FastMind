@@ -276,7 +276,8 @@ fn rewrite(
     out
 }
 
-fn decode(text: &str) -> String {
+/// `text` with its `%XX` escapes decoded.
+pub(crate) fn decode(text: &str) -> String {
     if !text.contains('%') {
         return text.to_owned();
     }
