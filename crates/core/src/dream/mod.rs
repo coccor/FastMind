@@ -378,10 +378,11 @@ pub fn run_in(
                 let at = proposals.len();
                 let (diagram, preview) =
                     with_drafted(merge.diagram, notes[keep].stem(), &merged, |drafted| {
-                        let group: Vec<&Note> = group.iter().map(|i| &notes[*i]).collect();
+                        // One question may answer several merges: each fix is keyed by its
+                        // own merge's notes, so they never share a cached fix.
                         held_diagrams.push(Held {
                             at: Some(at),
-                            key: ai::key("merge", &group),
+                            key: ai::key("merge", &all),
                             skill: "merge",
                             drafted,
                         });

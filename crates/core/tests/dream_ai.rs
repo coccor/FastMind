@@ -1029,3 +1029,80 @@ fn edited_note_makes_diagram_outdated() {
     assert_eq!(outcome.status, Status::Outdated);
     assert!(!nb.root.join("work/attachments/Request path.fdraw").exists());
 }
+
+#[test]
+fn two_merges_from_one_question_keep_their_own_fixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    for name in ["Wifi one", "Wifi two", "Wifi three", "Wifi four"] {
+        write(
+            &nb,
+            &format!("{name}.md"),
+            &format!(
+                "# {name}\n\nThe conference wifi network is DevConf-Guest, password orange-falcon-42.\n"
+            ),
+            10,
+        );
+    }
+    let fixes = Mutex::new(0);
+    let answer = |system: &str, user: &str, _: &Value| -> Result<String> {
+        if user.contains("<errors>") {
+            *fixes.lock().unwrap() += 1;
+            let which = if user.contains("first: node") {
+                "first"
+            } else {
+                "second"
+            };
+            return Ok(json!({
+                "diagram": format!("{which}: node \"{which} fixed\" at 40,40\nend: node \"End\" at 240,40\n{which} -> end")
+            })
+            .to_string());
+        }
+        if !system.contains("# Merge duplicate notes") {
+            return Err(Error::msg("unexpected question"));
+        }
+        let ids: Vec<Option<String>> = ["Wifi one", "Wifi two", "Wifi three", "Wifi four"]
+            .iter()
+            .map(|t| id_of(user, t))
+            .collect();
+        let [Some(a), Some(b), Some(c), Some(d)] = ids.as_slice() else {
+            return Ok(json!({"groups": []}).to_string());
+        };
+        let group = |keep: &str, absorb: &str, which: &str| {
+            json!({"keep": keep, "absorb": [absorb], "reason": "Same wifi.",
+                   "text": "# Wifi\n\nDevConf-Guest, orange-falcon-42.",
+                   "diagram": format!("{which}: node \"{which}\" at 40,40\n{which} -> nowhere"),
+                   "diagram_caption": which})
+        };
+        Ok(json!({"groups": [group(a, b, "first"), group(c, d, "second")]}).to_string())
+    };
+    let check = |report: &Report| {
+        let merges: Vec<&Proposal> = report
+            .proposals
+            .iter()
+            .filter(|p| p.kind == Kind::Merge)
+            .collect();
+        assert_eq!(merges.len(), 2, "{:?}", report.model_notes);
+        for merge in merges {
+            let Plan::Merge {
+                diagram: Some(d), ..
+            } = &merge.plan
+            else {
+                panic!("each merge keeps a diagram: {:?}", report.model_notes)
+            };
+            assert!(
+                d.text
+                    .starts_with(&format!("{}: node \"{} fixed\"", d.caption, d.caption)),
+                "{} got {}",
+                d.caption,
+                d.text
+            );
+        }
+    };
+    let report = answers(&answer, &nb);
+    assert_eq!(*fixes.lock().unwrap(), 2);
+    check(&report);
+    let again = answers(&answer, &nb);
+    assert_eq!(*fixes.lock().unwrap(), 2, "the fixes are cached");
+    check(&again);
+}
