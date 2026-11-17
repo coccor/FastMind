@@ -231,9 +231,9 @@ const DONE: [&str; 8] = [
     "superseded",
     "resolved",
 ];
-const ATTACHMENT_EXT: [&str; 16] = [
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "pdf", "docx", "xlsx", "pptx", "zip", "mp3",
-    "mp4", "mov", "wav",
+const ATTACHMENT_EXT: [&str; 17] = [
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "fdraw", "pdf", "docx", "xlsx", "pptx",
+    "zip", "mp3", "mp4", "mov", "wav",
 ];
 
 /// Looks at the whole notebook and writes proposals. Changes nothing in the notes.

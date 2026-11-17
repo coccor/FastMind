@@ -280,3 +280,27 @@ fn a_model_that_cant_answer_leaves_the_notebook_alone_and_says_so() {
         report.summary
     );
 }
+
+#[test]
+fn unlinked_fdraw_is_archived_like_an_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "x/a note.md",
+        "# A note\n\nNothing links to a drawing.\n",
+        1,
+    );
+    write(&nb, "x/attachments/old.fdraw", "box A\n", 200);
+    let report = dream::run(&nb, &DreamSettings::default(), None, Local::now()).unwrap();
+    assert!(
+        report.proposals.iter().any(|p| p.kind == Kind::Archive
+            && matches!(&p.plan, Plan::Archive { path } if path == "x/attachments/old.fdraw")),
+        "{:?}",
+        report
+            .proposals
+            .iter()
+            .map(|p| &p.title)
+            .collect::<Vec<_>>()
+    );
+}
