@@ -285,6 +285,12 @@ pub fn run_in(
     now: DateTime<Local>,
 ) -> Result<Report> {
     let judge = ai.map(|ask| ai::Judge::new(nb, ask, settings.model_requests, &places.preferences));
+    if let Some(judge) = &judge
+        && settings.diagram_notes > 0
+    {
+        // Diagrams come last; these requests stay for them however busy the night is.
+        judge.hold(DIAGRAM_RESERVE);
+    }
     let used_keys: std::sync::Mutex<HashSet<String>> = std::sync::Mutex::new(HashSet::new());
     let fingerprint = |paths: &[&Note]| -> Vec<(String, u64)> {
         paths
@@ -302,17 +308,8 @@ pub fn run_in(
     let mut claimed: HashSet<usize> = HashSet::new();
     let mut model_notes = Vec::new();
     // Diagrams the model drew that don't draw, by the proposal they belong to.
-    let mut held_diagrams: Vec<(usize, ai::Drafted)> = Vec::new();
+    let mut held_diagrams: Vec<Held> = Vec::new();
 
-    let protected = |note: &Note| {
-        note.is_home()
-            || note.is_pinned()
-            || note.is_template()
-            || matches!(
-                note.stem().to_ascii_lowercase().as_str(),
-                "readme" | "index" | "home"
-            )
-    };
     let recent = |note: &Note| now - note.touched < Duration::days(2);
 
     // 1. Duplicates: notes that say the same thing. The best-connected copy stays.
@@ -378,13 +375,17 @@ pub fn run_in(
                     .iter()
                     .map(|n| format!("\"{}\"", n.title))
                     .collect();
-                let (diagram, preview) = with_drafted(
-                    merge.diagram,
-                    notes[keep].stem(),
-                    &merged,
-                    proposals.len(),
-                    &mut held_diagrams,
-                );
+                let at = proposals.len();
+                let (diagram, preview) =
+                    with_drafted(merge.diagram, notes[keep].stem(), &merged, |drafted| {
+                        let group: Vec<&Note> = group.iter().map(|i| &notes[*i]).collect();
+                        held_diagrams.push(Held {
+                            at: Some(at),
+                            key: ai::key("merge", &group),
+                            skill: "merge",
+                            drafted,
+                        });
+                    });
                 proposals.push(Proposal {
                     id: String::new(),
                     kind: Kind::Merge,
@@ -605,12 +606,20 @@ pub fn run_in(
                 now,
             );
             let freed = group.iter().map(|n| n.size as i64).sum::<i64>() - text.len() as i64;
+            let at = proposals.len();
             let (diagram, preview) = with_drafted(
                 topic.diagram,
                 name.strip_suffix(".md").unwrap_or(&name),
                 &text,
-                proposals.len(),
-                &mut held_diagrams,
+                |drafted| {
+                    let asked: Vec<&Note> = members.iter().map(|i| &notes[*i]).collect();
+                    held_diagrams.push(Held {
+                        at: Some(at),
+                        key: ai::key("topic", &asked),
+                        skill: ai::topic_skill(hint),
+                        drafted,
+                    });
+                },
             );
             proposals.push(Proposal {
                 id: String::new(),
@@ -1353,7 +1362,28 @@ pub fn run_in(
         }
     }
 
-    // 6. Pack: old archived notes and old undo records go into one zip file.
+    // 6. Diagrams, last, from the requests held back for them: the ones that didn't draw are
+    //    asked about once more, then a few long notes whether a diagram would help them.
+    if let Some(judge) = &judge {
+        judge.release();
+        fix_held(judge, &mut proposals, &mut held_diagrams, &used_keys);
+        let skips = skipped(nb);
+        let taken: HashSet<String> = proposals
+            .iter()
+            .flat_map(|p| p.notes.iter().cloned())
+            .chain(
+                notes
+                    .iter()
+                    .map(|n| n.path.clone())
+                    .filter(|path| skips.contains(&format!("{:?}:{path}", Kind::Diagram))),
+            )
+            .collect();
+        let candidates = diagram_candidates(&notes, &taken, settings, places, &usage, now);
+        let drawn = drawn_proposals(judge, &notes, &candidates, &used_keys, &mut held_diagrams);
+        proposals.extend(drawn);
+    }
+
+    // 7. Pack: old archived notes and old undo records go into one zip file.
     let index = Index::load(nb);
     let old_items: Vec<&archive::Item> = index
         .loose()
@@ -1418,12 +1448,13 @@ pub fn run_in(
     }
     let failed_questions = model_notes.len();
     // Diagrams that still don't draw are left out; the notes they came with stay.
-    if let Some((_, first)) = held_diagrams.first() {
+    if let Some(first) = held_diagrams.first() {
         let dropped = held_diagrams.len();
         model_notes.push(format!(
             "{dropped} diagram{} dropped: {}",
             if dropped == 1 { "" } else { "s" },
             first
+                .drafted
                 .errors
                 .first()
                 .map_or("it doesn't draw", String::as_str)
@@ -1531,21 +1562,20 @@ fn majority_folder(notes: &[&Note]) -> String {
         .unwrap_or_default()
 }
 
-/// The diagram the model drew for the note at proposal `index` (named after `stem`), and the
-/// note's preview with it. A diagram that doesn't draw is held for the fix pass, so the note
-/// goes without it until then.
+/// The diagram the model drew for a note named after `stem`, and the note's preview with it.
+/// A diagram that doesn't draw goes to `hold`, for the fix pass, and the note goes without it
+/// until then.
 fn with_drafted(
     drafted: Option<ai::Drafted>,
     stem: &str,
     text: &str,
-    index: usize,
-    held: &mut Vec<(usize, ai::Drafted)>,
+    hold: impl FnOnce(ai::Drafted),
 ) -> (Option<Diagram>, String) {
     let Some(drafted) = drafted else {
         return (None, text.to_owned());
     };
     if !drafted.errors.is_empty() {
-        held.push((index, drafted));
+        hold(drafted);
         return (None, text.to_owned());
     }
     let file = format!("{stem}.fdraw");
@@ -2133,4 +2163,250 @@ fn retarget_all(
         tx.write(path, text.as_bytes())?;
     }
     Ok(())
+}
+
+/// Notes Dream never changes on its own: home notes, pinned ones, templates and the notebook's
+/// readme or index.
+fn protected(note: &Note) -> bool {
+    note.is_home()
+        || note.is_pinned()
+        || note.is_template()
+        || matches!(
+            note.stem().to_ascii_lowercase().as_str(),
+            "readme" | "index" | "home"
+        )
+}
+
+// ---- Diagrams, the night's last step ----
+
+/// Requests held back for diagrams while `diagram_notes` is on.
+const DIAGRAM_RESERVE: usize = 3;
+/// A note shorter than this is read at a glance; no diagram needed.
+const DIAGRAM_MIN_WORDS: usize = 250;
+/// Fewer signs of structure than this, and a note is prose or a list.
+const MIN_STRUCTURE: usize = 3;
+/// Words that tell of parts, steps or movement.
+const STRUCTURE_WORDS: [&str; 20] = [
+    "calls", "call", "sends", "send", "depends", "flows", "flow", "then", "state", "states",
+    "stage", "stages", "layer", "layers", "step", "steps", "phase", "phases", "before", "after",
+];
+/// Links to these are pictures already.
+const PICTURE_EXT: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "fdraw"];
+
+/// A diagram the model drew that doesn't draw, held for the night's last step.
+struct Held {
+    /// The merge or topic proposal it belongs to, by position; `None` for a diagram of its own.
+    at: Option<usize>,
+    /// The job that drew it: its cache key and skill, which its fix reuses.
+    key: String,
+    skill: &'static str,
+    drafted: ai::Drafted,
+}
+
+/// Asks once more about each held diagram. A fixed one joins its proposal (plan and preview);
+/// the rest stay held, with the errors they still have.
+fn fix_held(
+    judge: &ai::Judge,
+    proposals: &mut [Proposal],
+    held: &mut Vec<Held>,
+    used: &std::sync::Mutex<HashSet<String>>,
+) {
+    let answers = ai::in_parallel(held, |h| ai::fix(judge, h.skill, &h.key, &h.drafted, used));
+    for (h, fixed) in std::mem::take(held).into_iter().zip(answers) {
+        match (h.at, fixed) {
+            (Some(at), Some(fixed)) if fixed.errors.is_empty() => {
+                attach_diagram(&mut proposals[at], fixed);
+            }
+            (_, Some(fixed)) => held.push(Held {
+                drafted: fixed,
+                ..h
+            }),
+            (_, None) => held.push(h),
+        }
+    }
+}
+
+/// Puts a diagram that draws into a merge or topic proposal that was held without one.
+fn attach_diagram(proposal: &mut Proposal, drafted: ai::Drafted) {
+    let (path, text, slot) = match &mut proposal.plan {
+        Plan::Merge {
+            keep,
+            text: Some(text),
+            diagram,
+            ..
+        } => (keep.as_str(), text.as_str(), diagram),
+        Plan::Topic {
+            path,
+            text: Some(text),
+            diagram,
+            ..
+        } => (path.as_str(), text.as_str(), diagram),
+        _ => return,
+    };
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.strip_suffix(".md").unwrap_or(name);
+    let (diagram, preview) = with_drafted(Some(drafted), stem, text, |_| {});
+    *slot = diagram;
+    proposal.preview = Some(preview);
+}
+
+/// Existing notes worth asking about a diagram: long, with signs of structure and no picture
+/// yet, not protected, a record, an AI session or thread, in the inbox or touched in the last
+/// two days, and not `taken` by anything else this night. Most structure first (then most
+/// recently opened, then touched), at most `settings.diagram_notes`.
+fn diagram_candidates(
+    notes: &[Note],
+    taken: &HashSet<String>,
+    settings: &DreamSettings,
+    places: &Places,
+    usage: &Usage,
+    now: DateTime<Local>,
+) -> Vec<usize> {
+    let inbox = format!("{}/", places.inbox);
+    let mut ranked: Vec<(usize, usize)> = notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| {
+            !protected(n)
+                && !n.is_record()
+                && !matches!(n.note_type().as_str(), "ai-session" | "ai-thread")
+                && n.status() != "inbox"
+                && !n.path.starts_with(&inbox)
+                && now - n.touched >= Duration::days(2)
+                && !taken.contains(&n.path)
+                && text::words(n.body()).count() >= DIAGRAM_MIN_WORDS
+                && !has_picture(n.body())
+        })
+        .map(|(i, n)| (i, structure(n.body())))
+        .filter(|(_, score)| *score >= MIN_STRUCTURE)
+        .collect();
+    ranked.sort_by(|(a, x), (b, y)| {
+        let (na, nb) = (&notes[*a], &notes[*b]);
+        y.cmp(x)
+            .then_with(|| {
+                usage
+                    .last_opened(&nb.path)
+                    .cmp(&usage.last_opened(&na.path))
+            })
+            .then_with(|| nb.touched.cmp(&na.touched))
+    });
+    ranked.truncate(settings.diagram_notes);
+    ranked.into_iter().map(|(i, _)| i).collect()
+}
+
+/// How much `body` reads like structure: arrows and numbered steps count most, then `##`
+/// headings and words like "calls", "then" or "stage".
+fn structure(body: &str) -> usize {
+    let mut score = 0;
+    for line in body.lines() {
+        let line = line.trim_start();
+        if line.starts_with("## ") || line.starts_with("### ") {
+            score += 1;
+        }
+        let digits = line.chars().take_while(char::is_ascii_digit).count();
+        if digits > 0 && (line[digits..].starts_with(". ") || line[digits..].starts_with(") ")) {
+            score += 2;
+        }
+    }
+    let arrows = ["->", "\u{2192}", "=>"]
+        .iter()
+        .map(|a| body.matches(a).count())
+        .sum::<usize>();
+    let words = text::words(body)
+        .filter(|w| STRUCTURE_WORDS.contains(&w.as_str()))
+        .count();
+    score + 2 * arrows + words
+}
+
+/// Whether `body` shows a picture already: `![…](…)` or `![[…]]` to an image or a diagram.
+fn has_picture(body: &str) -> bool {
+    body.match_indices("![").any(|(at, _)| {
+        let line = body[at + 2..].lines().next().unwrap_or("");
+        let target = match line.strip_prefix('[') {
+            Some(wiki) => wiki.split("]]").next().unwrap_or("").split('|').next(),
+            None => line
+                .split_once("](")
+                .and_then(|(_, rest)| rest.split(')').next()),
+        };
+        let target = target
+            .unwrap_or("")
+            .split(['#', '?'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['<', '>']);
+        let ext = target
+            .rsplit_once('.')
+            .map_or(String::new(), |(_, e)| e.to_ascii_lowercase());
+        PICTURE_EXT.contains(&ext.as_str())
+    })
+}
+
+/// Asks whether each candidate is worth a diagram, and proposes the ones that are. A diagram
+/// that doesn't draw is asked about once more; still broken, it joins `held` to be reported.
+fn drawn_proposals(
+    judge: &ai::Judge,
+    notes: &[Note],
+    candidates: &[usize],
+    used: &std::sync::Mutex<HashSet<String>>,
+    held: &mut Vec<Held>,
+) -> Vec<Proposal> {
+    let answers = ai::in_parallel(candidates, |i| {
+        let note = &notes[*i];
+        let drawing = ai::draw(judge, note, used).filter(|d| d.worth)?;
+        let mut diagram = drawing.diagram?;
+        if !diagram.errors.is_empty()
+            && let Some(fixed) = ai::fix(
+                judge,
+                "draw-diagram",
+                &ai::key("diagram", &[note]),
+                &diagram,
+                used,
+            )
+        {
+            diagram = fixed;
+        }
+        Some((drawing.reason, diagram))
+    });
+    let mut out = Vec::new();
+    for (i, answer) in candidates.iter().zip(answers) {
+        let Some((reason, drafted)) = answer else {
+            continue;
+        };
+        let note = &notes[*i];
+        let (diagram, preview) = with_drafted(Some(drafted), note.stem(), &note.text, |drafted| {
+            held.push(Held {
+                at: None,
+                key: ai::key("diagram", &[note]),
+                skill: "draw-diagram",
+                drafted,
+            });
+        });
+        let Some(diagram) = diagram else { continue };
+        let grows = diagram.text.len() + preview.len() - note.text.len();
+        out.push(Proposal {
+            id: String::new(),
+            kind: Kind::Diagram,
+            title: format!("Diagram for \"{}\"", note.title),
+            reason: if reason.is_empty() {
+                "A diagram shows its structure at a glance.".into()
+            } else {
+                reason
+            },
+            notes: vec![note.path.clone()],
+            notes_removed: 0,
+            bytes_freed: -(grows as i64),
+            disk_freed: 0,
+            preview: Some(preview),
+            status: Status::Pending,
+            entry: None,
+            error: None,
+            plan: Plan::Diagram {
+                note: note.path.clone(),
+                diagram,
+            },
+            sources: vec![(note.path.clone(), text::fnv(note.text.as_bytes()))],
+        });
+    }
+    out
 }

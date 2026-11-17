@@ -34,9 +34,22 @@ fn id_of(user: &str, title: &str) -> Option<String> {
 /// The diagram the model draws for the starter topic.
 const STARTER_DIAGRAM: &str = "```fdraw\nfeed: node \"Feed daily\" at 40,40\nrise: node \"Rises\" at 240,40\nfeed -> rise\n```";
 
+/// The diagram the model draws for the note titled "Request path".
+const REQUEST_DIAGRAM: &str =
+    "gw: node \"Gateway\" at 40,40\ndb: node \"Database\" at 240,40\ngw -> db \"writes\"";
+
 /// A model with fixed opinions about this notebook.
 fn model(system: &str, user: &str, _schema: &Value) -> Result<String> {
-    let answer = if system.contains("# Merge duplicate notes") {
+    let answer = if system.contains("# Draw a diagram") {
+        if user.contains("title=\"Request path\"") {
+            json!({"worth": true, "kind": "architecture",
+                   "caption": "How a request reaches the database", "diagram": REQUEST_DIAGRAM,
+                   "reason": "The note follows a request through five services."})
+        } else {
+            json!({"worth": false, "kind": "", "caption": "", "diagram": "",
+                   "reason": "It reads well as it is."})
+        }
+    } else if system.contains("# Merge duplicate notes") {
         match (
             id_of(user, "Conference wifi"),
             id_of(user, "Wifi at the conference"),
@@ -678,4 +691,341 @@ fn broken_topic_diagram_is_held() {
         "a dropped diagram isn't a failed question: {}",
         report.summary
     );
+}
+
+// ---- The final diagram pass: fixes and the diagram kind ----
+
+/// A note of about 300 words following a request through services, step by step.
+fn structural(title: &str, rounds: usize) -> String {
+    let steps = [
+        "The browser sends the request to the gateway, which checks the session cookie first.",
+        "Then the gateway calls the auth service, and the auth service sends a signed token back.",
+        "After that the gateway passes the request to the orders service with the token attached.",
+        "The orders service depends on the inventory service and calls it before it writes anything.",
+        "Then the orders service writes the order to the database and sends an event to the queue.",
+        "The mailer reads the queue, and after the event arrives it sends the receipt to the customer.",
+    ];
+    let mut text = format!("# {title}\n\n");
+    for round in 1..=rounds {
+        text.push_str(&format!("## Stage {round}\n\n"));
+        for (i, step) in steps.iter().enumerate() {
+            text.push_str(&format!("{}. {step}\n", i + 1));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+/// About 300 words of facts in a bullet list: nothing a diagram would show.
+fn fact_list() -> String {
+    let facts = [
+        "Paris is the capital of France and sits on the Seine river.",
+        "Lisbon is the capital of Portugal and faces the Atlantic ocean.",
+        "Oslo is the capital of Norway and lies at the head of a fjord.",
+        "Vienna is the capital of Austria and sits on the Danube river.",
+        "Dublin is the capital of Ireland and faces the Irish sea.",
+        "Madrid is the capital of Spain and lies on a high plateau.",
+    ];
+    let mut text = String::from("# Capitals\n\n");
+    for _ in 0..4 {
+        for fact in facts {
+            text.push_str(&format!("- {fact}\n"));
+        }
+    }
+    text
+}
+
+/// What a question is: a diagram fix, a diagram question, a merge or something else.
+fn label(system: &str, user: &str) -> &'static str {
+    if user.contains("<errors>") {
+        "fix"
+    } else if system.contains("# Draw a diagram") {
+        "draw"
+    } else if system.contains("# Merge duplicate notes") {
+        "merge"
+    } else {
+        "other"
+    }
+}
+
+type Answer<'a> = &'a (dyn Fn(&str, &str, &Value) -> Result<String> + Sync);
+
+/// Dream with `answer`, and the questions it asked, by [`label`].
+fn counted(nb: &Notebook, settings: &DreamSettings, answer: Answer) -> (Report, Vec<&'static str>) {
+    let asked = Mutex::new(Vec::new());
+    let ask = |system: &str, user: &str, schema: &Value| {
+        asked.lock().unwrap().push(label(system, user));
+        answer(system, user, schema)
+    };
+    let report = dream::run(nb, settings, Some(&ask), Local::now()).unwrap();
+    (report, asked.into_inner().unwrap())
+}
+
+fn count(asked: &[&str], kind: &str) -> usize {
+    asked.iter().filter(|a| **a == kind).count()
+}
+
+/// Three pairs of notes that say the same thing.
+fn three_merge_groups(nb: &Notebook) {
+    for (name, body) in [
+        (
+            "Conference wifi",
+            "The conference wifi network is DevConf-Guest, password orange-falcon-42.",
+        ),
+        (
+            "Wifi at the conference",
+            "Got the conference wifi password from the badge desk: orange-falcon-42 on DevConf-Guest.",
+        ),
+        (
+            "Printer setup",
+            "The office printer is a Brother laser, add it by address with the generic PCL driver.",
+        ),
+        (
+            "Setting up the printer",
+            "Add the office Brother laser printer by its address, using the generic PCL driver.",
+        ),
+        (
+            "Gym hours",
+            "The gym opens at half six on weekdays and eight on weekends, closed on holidays.",
+        ),
+        (
+            "When the gym opens",
+            "Weekdays the gym opens at half six, weekends at eight; holidays it is closed.",
+        ),
+    ] {
+        write(
+            nb,
+            &format!("{name}.md"),
+            &format!("# {name}\n\n{body}\n"),
+            10,
+        );
+    }
+}
+
+#[test]
+fn long_structural_note_gets_a_diagram_proposal() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    let text = structural("Request path", 3);
+    write(&nb, "work/Request path.md", &text, 10);
+    let (report, asked) = counted(&nb, &DreamSettings::default(), &model);
+    assert_eq!(count(&asked, "draw"), 1, "{asked:?}");
+    let diagrams: Vec<&Proposal> = report
+        .proposals
+        .iter()
+        .filter(|p| p.kind == Kind::Diagram)
+        .collect();
+    assert_eq!(diagrams.len(), 1, "{:?}", report.model_notes);
+    let proposal = diagrams[0];
+    assert_eq!(proposal.title, "Diagram for \"Request path\"");
+    assert_eq!(
+        proposal.reason,
+        "The note follows a request through five services."
+    );
+    assert_eq!(proposal.notes, ["work/Request path.md"]);
+    assert_eq!(proposal.notes_removed, 0);
+    assert!(proposal.bytes_freed < -(REQUEST_DIAGRAM.len() as i64));
+    let preview = proposal.preview.as_ref().unwrap();
+    assert!(
+        preview.contains("![How a request reaches the database](attachments/Request%20path.fdraw)"),
+        "{preview}"
+    );
+    assert_eq!(
+        proposal.sources,
+        [(
+            "work/Request path.md".to_owned(),
+            fastmind_core::text::fnv(text.as_bytes())
+        )]
+    );
+    let Plan::Diagram { note, diagram } = &proposal.plan else {
+        panic!("{:?}", proposal.plan)
+    };
+    assert_eq!(note, "work/Request path.md");
+    assert_eq!(diagram.file, "attachments/Request path.fdraw");
+    assert_eq!(diagram.text, REQUEST_DIAGRAM);
+}
+
+#[test]
+fn short_list_or_imaged_notes_are_not_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(&nb, "work/Short path.md", &structural("Short path", 1), 10);
+    write(&nb, "geo/Capitals.md", &fact_list(), 10);
+    let imaged =
+        structural("Request path", 3).replacen("## Stage 1", "![x](a.png)\n\n## Stage 1", 1);
+    write(&nb, "work/Request path.md", &imaged, 10);
+    let (_, asked) = counted(&nb, &DreamSettings::default(), &model);
+    assert_eq!(count(&asked, "draw"), 0, "{asked:?}");
+}
+
+#[test]
+fn not_worth_it_is_remembered() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(&nb, "work/Order flow.md", &structural("Order flow", 3), 10);
+    let (report, asked) = counted(&nb, &DreamSettings::default(), &model);
+    assert_eq!(count(&asked, "draw"), 1, "{asked:?}");
+    assert!(report.proposals.iter().all(|p| p.kind != Kind::Diagram));
+    let (again, asked) = counted(&nb, &DreamSettings::default(), &model);
+    assert_eq!(count(&asked, "draw"), 0, "cached: {asked:?}");
+    assert!(again.proposals.iter().all(|p| p.kind != Kind::Diagram));
+}
+
+#[test]
+fn diagram_notes_zero_asks_nothing_and_reserves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    three_merge_groups(&nb);
+    write(
+        &nb,
+        "work/Request path.md",
+        &structural("Request path", 3),
+        10,
+    );
+    let settings = DreamSettings {
+        diagram_notes: 0,
+        model_requests: 3,
+        ..DreamSettings::default()
+    };
+    let (_, asked) = counted(&nb, &settings, &model);
+    assert_eq!(count(&asked, "merge"), 3, "{asked:?}");
+    assert_eq!(count(&asked, "draw"), 0, "{asked:?}");
+}
+
+#[test]
+fn reserve_keeps_three_for_diagrams() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    three_merge_groups(&nb);
+    write(
+        &nb,
+        "work/Request path.md",
+        &structural("Request path", 3),
+        10,
+    );
+    let settings = DreamSettings {
+        model_requests: 4,
+        ..DreamSettings::default()
+    };
+    let (report, asked) = counted(&nb, &settings, &model);
+    assert_eq!(count(&asked, "merge"), 1, "{asked:?}");
+    assert_eq!(count(&asked, "draw"), 1, "{asked:?}");
+    assert!(report.proposals.iter().any(|p| p.kind == Kind::Diagram));
+}
+
+/// The broken diagram the topic answer carries.
+const BROKEN: &str = "feed: node \"Feed\" at 40,40\nfeed -> nowhere\n";
+
+/// `model`, but the topic's diagram doesn't draw, and a fix answers `fixed`.
+fn broken_topic<'a>(
+    fixed: &'static str,
+    fixes: &'a Mutex<usize>,
+) -> impl Fn(&str, &str, &Value) -> Result<String> + Sync + 'a {
+    move |system: &str, user: &str, schema: &Value| {
+        if user.contains("<errors>") {
+            assert!(user.contains("Line 2: "), "the errors are given: {user}");
+            assert!(user.contains("Fix only these errors; change nothing else."));
+            *fixes.lock().unwrap() += 1;
+            return Ok(json!({ "diagram": fixed }).to_string());
+        }
+        let mut answer: Value = serde_json::from_str(&model(system, user, schema)?).unwrap();
+        if answer.get("members").is_some() {
+            answer["diagram"] = json!(BROKEN);
+        }
+        Ok(answer.to_string())
+    }
+}
+
+#[test]
+fn broken_diagram_fixed_in_final_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    starter_and_wifi(&nb);
+    let fixes = Mutex::new(0);
+    let answer = broken_topic(STARTER_DIAGRAM, &fixes);
+    let report = answers(&answer, &nb);
+    assert_eq!(*fixes.lock().unwrap(), 1);
+    let topic = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Topic)
+        .expect("the topic is proposed");
+    let Plan::Topic {
+        diagram: Some(d), ..
+    } = &topic.plan
+    else {
+        panic!("the fixed diagram is kept: {:?}", report.model_notes)
+    };
+    assert_eq!(d.file, "attachments/Sourdough starter.fdraw");
+    assert_eq!(d.caption, "How the starter is kept");
+    assert!(
+        d.text.starts_with("feed: node \"Feed daily\""),
+        "{}",
+        d.text
+    );
+    let preview = topic.preview.as_ref().unwrap();
+    assert!(
+        preview.contains("![How the starter is kept](attachments/Sourdough%20starter.fdraw)"),
+        "{preview}"
+    );
+    assert!(
+        !report.model_notes.iter().any(|n| n.contains("dropped")),
+        "{:?}",
+        report.model_notes
+    );
+}
+
+#[test]
+fn broken_diagram_still_broken_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    starter_and_wifi(&nb);
+    let fixes = Mutex::new(0);
+    let answer = broken_topic(BROKEN, &fixes);
+    let report = answers(&answer, &nb);
+    assert_eq!(*fixes.lock().unwrap(), 1);
+    let topic = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Topic)
+        .expect("the topic is still proposed");
+    assert!(matches!(&topic.plan, Plan::Topic { diagram: None, .. }));
+    assert!(!topic.preview.as_ref().unwrap().contains(".fdraw"));
+    assert!(
+        report
+            .model_notes
+            .iter()
+            .any(|n| n.starts_with("1 diagram dropped: Line")),
+        "{:?}",
+        report.model_notes
+    );
+}
+
+#[test]
+fn edited_note_makes_diagram_outdated() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "work/Request path.md",
+        &structural("Request path", 3),
+        10,
+    );
+    let report = answers(&model, &nb);
+    let id = report
+        .proposals
+        .iter()
+        .find(|p| p.kind == Kind::Diagram)
+        .expect("the diagram is proposed")
+        .id
+        .clone();
+    write(
+        &nb,
+        "work/Request path.md",
+        "# Request path\n\nRewritten.\n",
+        0,
+    );
+    let outcome = dream::apply(&nb, &id, Local::now()).unwrap();
+    assert_eq!(outcome.status, Status::Outdated);
+    assert!(!nb.root.join("work/attachments/Request path.fdraw").exists());
 }

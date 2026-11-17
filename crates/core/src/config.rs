@@ -71,6 +71,9 @@ pub struct DreamSettings {
     pub model_requests: usize,
     /// AI session notes nobody opened in this many days are proposed for the archive.
     pub ai_session_days: i64,
+    /// Existing notes asked about a diagram each night (`0` turns it off). Three requests are
+    /// kept back for diagrams while it's on.
+    pub diagram_notes: usize,
 }
 
 impl Default for Settings {
@@ -118,6 +121,7 @@ impl Default for DreamSettings {
             settle_after_hours: 6,
             model_requests: 20,
             ai_session_days: 90,
+            diagram_notes: 3,
         }
     }
 }
