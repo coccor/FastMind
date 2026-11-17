@@ -126,10 +126,10 @@ their titles.
 
 ## Building from source
 
-You need Rust (stable). On Linux the desktop app also needs WebKitGTK and the tray libraries:
+You need Rust (stable). On Linux the desktop app also needs WebKitGTK, the tray libraries and ALSA (for the microphone):
 
 ```sh
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libasound2-dev
 cargo test --workspace
 cargo build --release -p fastmind-desktop -p fastmind-cli
 ```
