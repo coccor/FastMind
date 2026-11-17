@@ -426,3 +426,28 @@ fn settling_notes_that_share_an_attachment_in_one_change_keeps_it_valid_and_undo
             && nb.exists("Fresh memories/Starter rye.md")
     );
 }
+
+#[test]
+fn a_collision_rewrites_only_the_moved_files_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    inbox_note(
+        &nb,
+        "A",
+        "![p](attachments/x.png) [b](attachments/x.png.bak) ![t](attachments/x.png \"T\")\n![[logo.png]] ![[logo.png2]] ![[logo.png|40]]",
+    );
+    write(&nb, "Fresh memories/attachments/x.png", "NEW", 1);
+    write(&nb, "Fresh memories/attachments/logo.png", "NEW", 1);
+    write(&nb, "work/attachments/x.png", "OLD", 1);
+    write(&nb, "work/attachments/logo.png", "OLD", 1);
+    fastmind_core::filing::file(&nb, "Fresh memories/A.md", Some("work"), None).unwrap();
+    let text = read(&nb, "work/A.md");
+    assert!(
+        text.contains("![p](attachments/x%202.png) [b](attachments/x.png.bak) ![t](attachments/x%202.png \"T\")"),
+        "{text}"
+    );
+    assert!(
+        text.contains("![[logo 2.png]] ![[logo.png2]] ![[logo 2.png|40]]"),
+        "{text}"
+    );
+}

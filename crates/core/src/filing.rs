@@ -352,7 +352,7 @@ fn carry_attachments(
                 .map(links::encode)
                 .collect::<Vec<_>>()
                 .join("/");
-            body = body.replace(&format!("]({written}"), &format!("]({new}"));
+            body = replace_target(&body, "](", &written, &new, &[')', ' ', '\t']);
         }
         done.insert(written, moved);
     }
@@ -365,11 +365,31 @@ fn carry_attachments(
         if let Some(free) = &moved
             && *free != name
         {
-            body = body.replace(&format!("![[{written}"), &format!("![[{free}"));
+            body = replace_target(&body, "![[", &written, free, &[']', '|', '#']);
         }
         done.insert(format!("![[{written}"), moved);
     }
     Ok(body)
+}
+
+/// `body` with each `{open}{from}` link target that ends right there (the next character is one
+/// of `ends`) pointing at `to` instead; `x.png` doesn't match `x.png.bak`.
+fn replace_target(body: &str, open: &str, from: &str, to: &str, ends: &[char]) -> String {
+    let needle = format!("{open}{from}");
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(at) = rest.find(&needle) {
+        let after = &rest[at + needle.len()..];
+        out.push_str(&rest[..at + open.len()]);
+        if after.starts_with(ends) {
+            out.push_str(to);
+        } else {
+            out.push_str(from);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `text` with `line` added to its "## Notes" list (made at the end when there's none).

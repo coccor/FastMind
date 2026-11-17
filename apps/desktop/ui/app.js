@@ -721,7 +721,7 @@ function renderDream(report) {
             <div class="reason">${esc(p.reason)}</div>
             <div class="meta">
               <span>${esc(KIND_NAME[p.kind])}</span>
-              ${p.plan && p.plan.diagram ? "<span>+ diagram</span>" : ""}
+              ${(p.kind === "merge" || p.kind === "topic") && p.plan && p.plan.diagram ? "<span>+ diagram</span>" : ""}
               ${p.notes_removed ? `<span>−${p.notes_removed} note${p.notes_removed > 1 ? "s" : ""}</span>` : ""}
               ${freed > 0 ? `<span>−${bytes(freed)}</span>` : ""}
               ${p.error ? `<span class="status outdated">${esc(p.error)}</span>` : ""}
@@ -757,9 +757,11 @@ $("#proposals").addEventListener("click", async (event) => {
   if (act === "preview") {
     const pane = card.querySelector(".preview");
     const proposal = ($("#proposals")._report.proposals || []).find((p) => p.id === id);
-    pane.innerHTML = renderMarkdown(proposal.preview || "");
-    loadImages(pane, previewNotePath(proposal), diagramsOf(proposal));
     pane.hidden = !pane.hidden;
+    if (!pane.hidden) {
+      pane.innerHTML = renderMarkdown(proposal.preview || "");
+      loadImages(pane, previewNotePath(proposal), diagramsOf(proposal));
+    }
     button.textContent = pane.hidden ? "Preview" : "Hide preview";
     return;
   }
