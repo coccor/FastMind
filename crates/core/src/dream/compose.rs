@@ -96,6 +96,53 @@ fn merged_list(base: Vec<String>, more: impl IntoIterator<Item = String>) -> Vec
     out
 }
 
+/// The Markdown link to a diagram file in `attachments/`, spaces written as `%20`.
+pub fn diagram_link(file_name: &str) -> String {
+    format!("attachments/{}", file_name.replace(' ', "%20"))
+}
+
+/// `note_text` with the diagram placed after its title and the summary quote that follows it,
+/// or first in the body when it has no title.
+pub fn with_diagram(note_text: &str, caption: &str, link: &str) -> String {
+    let caption = caption.replace(['[', ']', '\n', '\r'], " ");
+    let image = format!("![{}]({link})", caption.trim());
+    let start = frontmatter::parse(note_text).body_start;
+    let (front, body) = note_text.split_at(start);
+    let mut offset = 0;
+    let mut title_end = None;
+    for line in body.split_inclusive('\n') {
+        offset += line.len();
+        if line.starts_with("# ") {
+            title_end = Some(offset);
+            break;
+        }
+    }
+    let Some(mut at) = title_end else {
+        return format!("{front}{image}\n\n{body}");
+    };
+    // A blockquote directly after the title (blank lines between allowed) stays above the image.
+    let mut quote_end = None;
+    let mut pos = at;
+    for line in body[at..].split_inclusive('\n') {
+        if line.trim().is_empty() && quote_end.is_none() {
+            pos += line.len();
+        } else if line.starts_with('>') {
+            pos += line.len();
+            quote_end = Some(pos);
+        } else {
+            break;
+        }
+    }
+    if let Some(end) = quote_end {
+        at = end;
+    }
+    let mut head = body[..at].to_owned();
+    if !head.ends_with('\n') {
+        head.push('\n');
+    }
+    format!("{front}{head}\n{image}\n{}", &body[at..])
+}
+
 /// `keep` with what `absorb` added, their titles as aliases so links and searches still find them.
 pub fn merge(keep: &Note, absorb: &[&Note], now: DateTime<Local>) -> String {
     let (mut known, mut known_shingles) = seed_known(keep);
@@ -263,6 +310,31 @@ mod tests {
 
     fn note(path: &str, text: &str) -> Note {
         build_note(path.into(), text.into(), text.len() as u64, Local::now())
+    }
+
+    #[test]
+    fn with_diagram_after_title_and_summary() {
+        assert_eq!(
+            with_diagram("# T\n\n> s\n\nbody", "c", "attachments/T.fdraw"),
+            "# T\n\n> s\n\n![c](attachments/T.fdraw)\n\nbody"
+        );
+        assert_eq!(
+            with_diagram("# T\n\nbody", "c", "attachments/T.fdraw"),
+            "# T\n\n![c](attachments/T.fdraw)\n\nbody"
+        );
+    }
+
+    #[test]
+    fn with_diagram_no_heading() {
+        assert_eq!(
+            with_diagram("---\ntags: [a]\n---\nbody\n", "c", "attachments/x.fdraw"),
+            "---\ntags: [a]\n---\n![c](attachments/x.fdraw)\n\nbody\n"
+        );
+    }
+
+    #[test]
+    fn diagram_link_encodes_spaces() {
+        assert_eq!(diagram_link("Note 2.fdraw"), "attachments/Note%202.fdraw");
     }
 
     #[test]

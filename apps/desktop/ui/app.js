@@ -455,9 +455,9 @@ function loadImages(root, notePath, diagrams = {}) {
     let src = decodeURIComponent(img.dataset.src);
     const isDiagram = /\.fdraw$/i.test(src);
     const failed = (text) => img.replaceWith(Object.assign(document.createElement("span"), { className: "muted", textContent: text }));
-    if (isDiagram && Object.prototype.hasOwnProperty.call(diagrams, img.dataset.src)) {
+    if (isDiagram && Object.prototype.hasOwnProperty.call(diagrams, src)) {
       try {
-        const { data } = await call("diagram_draw", { text: diagrams[img.dataset.src], dark });
+        const { data } = await call("diagram_draw", { text: diagrams[src], dark });
         img.src = data;
       } catch (error) {
         failed(`[diagram: ${String(error.message || error)}]`);

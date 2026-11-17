@@ -3,7 +3,7 @@
 use chrono::Local;
 use fastmind_core::Notebook;
 use fastmind_core::config::DreamSettings;
-use fastmind_core::dream::{self, Kind, Plan, Status};
+use fastmind_core::dream::{self, Diagram, Kind, Plan, Proposal, Report, Status};
 use fastmind_core::{Error, Result};
 use serde_json::{Value, json};
 use std::fs;
@@ -303,4 +303,213 @@ fn unlinked_fdraw_is_archived_like_an_image() {
             .map(|p| &p.title)
             .collect::<Vec<_>>()
     );
+}
+
+// ---- Diagrams in plans ----
+
+fn diagram(caption: &str) -> Diagram {
+    Diagram {
+        file: "attachments/Note.fdraw".into(),
+        caption: caption.into(),
+        text: "box A\nbox B\nA -> B\n".into(),
+    }
+}
+
+fn proposal(id: &str, kind: Kind, notes: &[&str], plan: Plan) -> Proposal {
+    Proposal {
+        id: id.into(),
+        kind,
+        title: format!("Proposal {id}"),
+        reason: "test".into(),
+        notes: notes.iter().map(|n| n.to_string()).collect(),
+        notes_removed: 0,
+        bytes_freed: 0,
+        disk_freed: 0,
+        preview: None,
+        status: Status::Pending,
+        entry: None,
+        error: None,
+        plan,
+        sources: Vec::new(),
+    }
+}
+
+/// Saves `proposals` as the notebook's latest Dream report.
+fn save_report(nb: &Notebook, proposals: Vec<Proposal>) {
+    let report = Report {
+        id: "r1".into(),
+        ran_at: Local::now(),
+        took_ms: 0,
+        before: Default::default(),
+        proposals,
+        model: None,
+        model_notes: Vec::new(),
+        summary: String::new(),
+    };
+    dream::save_report(nb, &report).unwrap();
+}
+
+fn read(nb: &Notebook, rel: &str) -> String {
+    fs::read_to_string(nb.root.join(rel)).unwrap()
+}
+
+fn diagram_plan(caption: &str) -> Plan {
+    Plan::Diagram {
+        note: "notes/Note.md".into(),
+        diagram: diagram(caption),
+    }
+}
+
+#[test]
+fn old_report_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    let json = json!({
+        "id": "r0", "ran_at": "2026-01-01T00:00:00+00:00", "took_ms": 1,
+        "before": {"notes": 0, "bytes": 0, "attachments": 0, "attachment_bytes": 0,
+                   "archive_bytes": 0, "journal_bytes": 0},
+        "proposals": [{
+            "id": "p1", "kind": "topic", "title": "T", "reason": "r", "notes": ["a.md"],
+            "notes_removed": 1, "bytes_freed": 0, "preview": null, "status": "pending",
+            "plan": {"type": "topic", "path": "T.md", "title": "T", "summary": "s",
+                     "fragments": ["a.md"]}
+        }, {
+            "id": "p2", "kind": "merge", "title": "M", "reason": "r", "notes": ["a.md"],
+            "notes_removed": 1, "bytes_freed": 0, "preview": null, "status": "pending",
+            "plan": {"type": "merge", "keep": "a.md", "absorb": ["b.md"]}
+        }],
+        "model": null, "summary": ""
+    });
+    let state = nb
+        .root
+        .join(fastmind_core::notebook::STATE_DIR)
+        .join("dream");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("latest.json"), json.to_string()).unwrap();
+    let report = dream::latest(&nb).expect("an old report loads");
+    assert!(matches!(
+        &report.proposals[0].plan,
+        Plan::Topic { diagram: None, .. }
+    ));
+    assert!(matches!(
+        &report.proposals[1].plan,
+        Plan::Merge { diagram: None, .. }
+    ));
+}
+
+#[test]
+fn kind_parses_diagram() {
+    assert_eq!(Kind::parse("draw"), Some(Kind::Diagram));
+    assert_eq!(Kind::parse("diagram"), Some(Kind::Diagram));
+}
+
+#[test]
+fn applying_diagram_plan_writes_file_and_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    let original = "# Note\n\nBody.\n";
+    write(&nb, "notes/Note.md", original, 1);
+    save_report(
+        &nb,
+        vec![proposal(
+            "d1",
+            Kind::Diagram,
+            &["notes/Note.md"],
+            diagram_plan("c"),
+        )],
+    );
+    let done = dream::apply(&nb, "d1", Local::now()).unwrap();
+    assert_eq!(done.status, Status::Applied, "{:?}", done.error);
+    assert_eq!(
+        read(&nb, "notes/attachments/Note.fdraw"),
+        "box A\nbox B\nA -> B\n"
+    );
+    assert!(read(&nb, "notes/Note.md").contains("![c](attachments/Note.fdraw)"));
+    dream::undo(&nb, "d1").unwrap();
+    assert!(!nb.root.join("notes/attachments/Note.fdraw").exists());
+    assert_eq!(read(&nb, "notes/Note.md"), original);
+}
+
+#[test]
+fn second_diagram_gets_a_free_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(&nb, "notes/Note.md", "# Note\n\nBody.\n", 1);
+    write(&nb, "notes/attachments/Note.fdraw", "box Old\n", 1);
+    save_report(
+        &nb,
+        vec![proposal(
+            "d1",
+            Kind::Diagram,
+            &["notes/Note.md"],
+            diagram_plan("c"),
+        )],
+    );
+    let done = dream::apply(&nb, "d1", Local::now()).unwrap();
+    assert_eq!(done.status, Status::Applied, "{:?}", done.error);
+    assert_eq!(read(&nb, "notes/attachments/Note.fdraw"), "box Old\n");
+    assert_eq!(
+        read(&nb, "notes/attachments/Note 2.fdraw"),
+        "box A\nbox B\nA -> B\n"
+    );
+    assert!(read(&nb, "notes/Note.md").contains("![c](attachments/Note%202.fdraw)"));
+}
+
+#[test]
+fn topic_with_diagram_writes_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(&nb, "kitchen/Feeding.md", "# Feeding\n\nDaily.\n", 1);
+    let plan = Plan::Topic {
+        path: "kitchen/Starter.md".into(),
+        title: "Starter".into(),
+        summary: "How it is kept.".into(),
+        fragments: vec!["kitchen/Feeding.md".into()],
+        text: Some("# Starter\n\n> How it is kept.\n\nDaily.\n".into()),
+        diagram: Some(diagram("flow")),
+    };
+    save_report(
+        &nb,
+        vec![proposal("t1", Kind::Topic, &["kitchen/Feeding.md"], plan)],
+    );
+    let done = dream::apply(&nb, "t1", Local::now()).unwrap();
+    assert_eq!(done.status, Status::Applied, "{:?}", done.error);
+    let topic = read(&nb, "kitchen/Starter.md");
+    assert!(
+        topic.contains("> How it is kept.\n\n![flow](attachments/Starter.fdraw)\n"),
+        "{topic}"
+    );
+    assert!(nb.root.join("kitchen/attachments/Starter.fdraw").exists());
+    // One journal entry holds both, so one undo removes both.
+    dream::undo(&nb, "t1").unwrap();
+    assert!(!nb.root.join("kitchen/Starter.md").exists());
+    assert!(!nb.root.join("kitchen/attachments/Starter.fdraw").exists());
+    assert!(nb.root.join("kitchen/Feeding.md").exists());
+}
+
+#[test]
+fn merge_with_diagram_writes_it_beside_the_kept_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(&nb, "w/Keep.md", "# Keep\n\nOne.\n", 1);
+    write(&nb, "w/Other.md", "# Other\n\nOne again.\n", 1);
+    let plan = Plan::Merge {
+        keep: "w/Keep.md".into(),
+        absorb: vec!["w/Other.md".into()],
+        text: Some("# Keep\n\nOne.\n".into()),
+        diagram: Some(diagram("c")),
+    };
+    save_report(
+        &nb,
+        vec![proposal(
+            "m1",
+            Kind::Merge,
+            &["w/Keep.md", "w/Other.md"],
+            plan,
+        )],
+    );
+    let done = dream::apply(&nb, "m1", Local::now()).unwrap();
+    assert_eq!(done.status, Status::Applied, "{:?}", done.error);
+    assert!(read(&nb, "w/Keep.md").contains("![c](attachments/Keep.fdraw)"));
+    assert!(nb.root.join("w/attachments/Keep.fdraw").exists());
 }

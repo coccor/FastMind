@@ -32,6 +32,8 @@ pub enum Kind {
     Pack,
     /// New memories moved from the inbox to where they belong.
     Settle,
+    /// A diagram added to a note.
+    Diagram,
 }
 
 impl Kind {
@@ -43,9 +45,21 @@ impl Kind {
             "fix_link" | "link" => Some(Kind::FixLink),
             "pack" => Some(Kind::Pack),
             "settle" | "file" => Some(Kind::Settle),
+            "diagram" | "draw" => Some(Kind::Diagram),
             _ => None,
         }
     }
+}
+
+/// A FastDraw diagram a plan adds to a note.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Diagram {
+    /// The `.fdraw` file as the preview names it (decoded, with real spaces). When the plan is
+    /// applied the file is named afresh, beside the note.
+    pub file: String,
+    pub caption: String,
+    /// The FastDraw source.
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -57,6 +71,8 @@ pub enum Plan {
         /// The merged note as the model wrote it.
         #[serde(default)]
         text: Option<String>,
+        #[serde(default)]
+        diagram: Option<Diagram>,
     },
     Topic {
         path: String,
@@ -66,6 +82,12 @@ pub enum Plan {
         /// The topic note as the model wrote it.
         #[serde(default)]
         text: Option<String>,
+        #[serde(default)]
+        diagram: Option<Diagram>,
+    },
+    Diagram {
+        note: String,
+        diagram: Diagram,
     },
     Archive {
         path: String,
@@ -185,6 +207,11 @@ pub fn latest(nb: &Notebook) -> Option<Report> {
     fs::read(dream_dir(nb).join("latest.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+/// Saves `report` as the latest one.
+pub fn save_report(nb: &Notebook, report: &Report) -> Result<()> {
+    save(nb, report)
 }
 
 fn save(nb: &Notebook, report: &Report) -> Result<()> {
@@ -370,6 +397,7 @@ pub fn run_in(
                         keep: notes[keep].path.clone(),
                         absorb: absorbed.iter().map(|n| n.path.clone()).collect(),
                         text: Some(merged),
+                        diagram: None,
                     },
                     sources: fingerprint(&all),
                 });
@@ -444,6 +472,7 @@ pub fn run_in(
                     keep: notes[keep].path.clone(),
                     absorb: absorbed.iter().map(|n| n.path.clone()).collect(),
                     text: None,
+                    diagram: None,
                 },
                 sources: Vec::new(),
             });
@@ -595,6 +624,7 @@ pub fn run_in(
                     summary: topic.summary,
                     fragments: group.iter().map(|n| n.path.clone()).collect(),
                     text: Some(text),
+                    diagram: None,
                 },
                 sources: fingerprint(&group),
             });
@@ -681,6 +711,7 @@ pub fn run_in(
                     summary,
                     fragments: group.iter().map(|n| n.path.clone()).collect(),
                     text: None,
+                    diagram: None,
                 },
                 sources: Vec::new(),
             });
@@ -769,6 +800,7 @@ pub fn run_in(
                     summary,
                     fragments: group.iter().map(|n| n.path.clone()).collect(),
                     text: None,
+                    diagram: None,
                 },
                 sources: Vec::new(),
             });
@@ -1550,6 +1582,13 @@ fn summarize(before: &Totals, proposals: &[Proposal]) -> String {
             if topics == 1 { "" } else { "s" }
         ));
     }
+    let diagrams = count(Kind::Diagram);
+    if diagrams > 0 {
+        parts.push(format!(
+            "{diagrams} diagram{} to draw",
+            if diagrams == 1 { "" } else { "s" }
+        ));
+    }
     let archives = count(Kind::Archive);
     if archives > 0 {
         parts.push(format!("{archives} to archive"));
@@ -1792,7 +1831,12 @@ fn execute(
     match &proposal.plan {
         // Settling files each note in this same change, below.
         Plan::Settle { .. } => {}
-        Plan::Merge { keep, absorb, text } => {
+        Plan::Merge {
+            keep,
+            absorb,
+            text,
+            diagram,
+        } => {
             let mut all = vec![keep.clone()];
             all.extend(absorb.iter().cloned());
             if let Some(gone) = missing(&all) {
@@ -1803,6 +1847,10 @@ fn execute(
             let merged = text
                 .clone()
                 .unwrap_or_else(|| compose::merge(keep_note, &absorbed, now));
+            let merged = match diagram {
+                Some(d) => write_diagram(&mut tx, nb, keep, &merged, d)?,
+                None => merged,
+            };
             let gone: HashSet<String> = absorb.iter().cloned().collect();
             retarget_all(&mut tx, &notes, &gone, keep, Some((keep.as_str(), merged)))?;
             for note in absorbed {
@@ -1821,6 +1869,7 @@ fn execute(
             summary,
             fragments,
             text: written,
+            diagram,
         } => {
             if let Some(gone) = missing(fragments) {
                 return Err(Outcome::Outdated(format!("{gone} is gone")));
@@ -1839,6 +1888,10 @@ fn execute(
             } else {
                 path.clone()
             };
+            let text = match diagram {
+                Some(d) => write_diagram(&mut tx, nb, &path, &text, d)?,
+                None => text,
+            };
             tx.write(&path, text.as_bytes())?;
             let gone: HashSet<String> = fragments.iter().cloned().collect();
             retarget_all(&mut tx, &notes, &gone, &path, None)?;
@@ -1851,6 +1904,13 @@ fn execute(
                     &format!("gathered into \"{title}\""),
                 )?;
             }
+        }
+        Plan::Diagram { note, diagram } => {
+            let Some(current) = find(note) else {
+                return Err(Outcome::Outdated(format!("{note} is gone")));
+            };
+            let text = write_diagram(&mut tx, nb, note, &current.text, diagram)?;
+            tx.write(note, text.as_bytes())?;
         }
         Plan::Archive { path } => {
             if !nb.exists(path) {
@@ -1955,6 +2015,27 @@ fn execute(
         let _ = usage.save(nb);
     }
     Ok(entry.id)
+}
+
+/// Writes the diagram's `.fdraw` into `attachments/` beside the note at `note_path`, under a
+/// free name made from the note's name, and returns `note_text` with the link to it added.
+fn write_diagram(
+    tx: &mut Transaction,
+    nb: &Notebook,
+    note_path: &str,
+    note_text: &str,
+    d: &Diagram,
+) -> Result<String> {
+    let (folder, name) = note_path.rsplit_once('/').unwrap_or(("", note_path));
+    let stem = name.strip_suffix(".md").unwrap_or(name);
+    let attachments = join(folder, "attachments");
+    let file = fsx::free_name(stem, "fdraw", |c| nb.exists(&join(&attachments, c)));
+    tx.write(&join(&attachments, &file), d.text.as_bytes())?;
+    Ok(compose::with_diagram(
+        note_text,
+        &d.caption,
+        &compose::diagram_link(&file),
+    ))
 }
 
 /// Points every link at a note in `gone` to `new_stem` instead, across the notebook.

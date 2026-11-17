@@ -9,7 +9,7 @@ use crate::notebook::{HOME_TYPES, Notebook};
 use crate::search::Index;
 use crate::{Error, Result, fsx};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Home {
@@ -209,6 +209,7 @@ pub fn file_in(
                 body = links::retarget_markdown(&body, |t| t == written, to, &target);
             }
         }
+        body = carry_attachments(tx, &notes, path, &target, &target_folder, body)?;
         text = format!("{head}{body}");
         tx.write(&target, text.as_bytes())?;
         tx.remove(path)?;
@@ -243,6 +244,71 @@ pub fn file_in(
         }
     }
     Ok(target)
+}
+
+/// The targets of the Markdown links and images in `body` that are not notes, as written.
+fn file_links(body: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (at, _) in body.match_indices("](") {
+        let rest = &body[at + 2..];
+        let end = rest.find([')', ' ', '\n']).unwrap_or(rest.len());
+        found.push(rest[..end].to_owned());
+    }
+    found
+}
+
+/// The files a note shows from its own `attachments/` folder (images, diagrams) go with it: they
+/// are copied into `attachments/` beside its new place, and moved when no other note uses them.
+/// Returns `body` with those links pointing at the copies.
+fn carry_attachments(
+    tx: &mut Transaction,
+    notes: &[crate::Note],
+    from: &str,
+    to: &str,
+    to_folder: &str,
+    mut body: String,
+) -> Result<String> {
+    let nb = tx.notebook().clone();
+    let mut seen = HashSet::new();
+    for written in file_links(&body) {
+        let local = !written.contains("://") && !written.starts_with(['/', '#']);
+        if !local || written.to_ascii_lowercase().ends_with(".md") || !seen.insert(written.clone())
+        {
+            continue;
+        }
+        let source = links::relative_target_path(from, &written);
+        let (source_folder, name) = source.rsplit_once('/').unwrap_or(("", &source));
+        if !source_folder.ends_with("attachments") || !nb.exists(&source) {
+            continue;
+        }
+        let folder = if to_folder.is_empty() {
+            "attachments".to_owned()
+        } else {
+            format!("{to_folder}/attachments")
+        };
+        if folder == source_folder {
+            continue;
+        }
+        let (stem, extension) = name.rsplit_once('.').unwrap_or((name, ""));
+        let free = fsx::free_name(stem, extension, |c| nb.exists(&format!("{folder}/{c}")));
+        let moved = format!("{folder}/{free}");
+        tx.write(&moved, &std::fs::read(nb.path(&source)?)?)?;
+        let shared = notes.iter().filter(|n| n.path != from).any(|n| {
+            file_links(n.body())
+                .iter()
+                .any(|t| links::relative_target_path(&n.path, t) == source)
+        });
+        if !shared {
+            tx.remove(&source)?;
+        }
+        let new = links::relative_path(to, &moved)
+            .split('/')
+            .map(|part| part.replace(' ', "%20"))
+            .collect::<Vec<_>>()
+            .join("/");
+        body = body.replace(&format!("]({written}"), &format!("]({new}"));
+    }
+    Ok(body)
 }
 
 /// `text` with `line` added to its "## Notes" list (made at the end when there's none).

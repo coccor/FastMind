@@ -197,3 +197,38 @@ fn new_memories_settle_where_they_belong_and_the_rest_wait() {
             .contains("Invoices batch")
     );
 }
+
+#[test]
+fn settled_note_keeps_its_diagram() {
+    let dir = tempfile::tempdir().unwrap();
+    let nb = Notebook::open(dir.path()).unwrap();
+    write(
+        &nb,
+        "Fresh memories/Flow.md",
+        "---\nstatus: inbox\n---\n# Flow\n\n![d](attachments/x%20y.fdraw)\n",
+        1,
+    );
+    write(&nb, "Fresh memories/attachments/x y.fdraw", "box A\n", 1);
+    let target =
+        fastmind_core::filing::file(&nb, "Fresh memories/Flow.md", Some("work"), None).unwrap();
+    assert_eq!(target, "work/Flow.md");
+    // The link resolves the way the reader resolves it: beside the note, in attachments/.
+    assert!(
+        nb.exists("work/attachments/x y.fdraw"),
+        "the diagram moved with its note"
+    );
+    assert!(
+        fs::read_to_string(nb.root.join(&target))
+            .unwrap()
+            .contains("attachments/x%20y.fdraw")
+    );
+    assert!(
+        !nb.exists("Fresh memories/attachments/x y.fdraw"),
+        "and left nothing behind"
+    );
+    // Undo puts everything back.
+    let entry = journal::history(&nb).into_iter().next().unwrap();
+    journal::undo(&nb, &entry.id).unwrap();
+    assert!(nb.exists("Fresh memories/attachments/x y.fdraw"));
+    assert!(!nb.exists("work/attachments/x y.fdraw"));
+}
