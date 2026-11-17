@@ -13,6 +13,9 @@ use fastdraw_render::{Level, Source};
 /// Diagram text longer than this many bytes is not drawn.
 pub const MAX_BYTES: usize = 1_000_000;
 
+/// The one error reported when drawing panics.
+const PANIC_TEXT: &str = "FastDraw could not draw this diagram";
+
 /// A drawn diagram: the SVG (empty when nothing could be drawn) and one `Line n: message` per error.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drawn {
@@ -31,7 +34,7 @@ pub fn draw(text: &str, file: Option<&Path>, dark: bool) -> Drawn {
     }
     catch_unwind(AssertUnwindSafe(|| draw_unguarded(text, file, dark))).unwrap_or_else(|_| Drawn {
         svg: String::new(),
-        errors: vec!["the diagram could not be drawn".to_owned()],
+        errors: vec![PANIC_TEXT.to_owned()],
     })
 }
 
@@ -174,6 +177,25 @@ mod tests {
         assert!(d.errors.is_empty(), "{:?}", d.errors);
         assert!(d.svg.starts_with("<svg"));
         assert!(d.svg.contains("@font-face"));
+        let used = families_used(&d.svg);
+        assert!(!used.is_empty());
+        for family in used
+            .iter()
+            .filter(|u| bundled_faces().iter().any(|f| &f.family == *u))
+        {
+            let rule = format!("@font-face{{font-family:\"{family}\"");
+            assert!(d.svg.contains(&rule), "no {rule}");
+        }
+        assert!(
+            used.iter()
+                .any(|u| bundled_faces().iter().any(|f| &f.family == u)),
+            "no bundled family in {used:?}"
+        );
+    }
+
+    #[test]
+    fn panic_text_is_the_specified_one() {
+        assert_eq!(PANIC_TEXT, "FastDraw could not draw this diagram");
     }
 
     #[test]
